@@ -180,7 +180,10 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32
     
     # profile generate 
 
-    with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        with_flops=True, record_shapes=True
+    ) as prof:
         outputs = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -189,8 +192,9 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32
                 top_p=0.4,
                 temperature=0.6
             )
-    
-    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
+    print(prof.key_averages().table(sort_by="flops", row_limit=10))
+    prof.export_chrome_trace("trace.json")
 
 
 def print_benchmark_results(results, model, implementation_type):
@@ -272,9 +276,10 @@ def main():
     iter=int(args.iterations)
     # Run benchmark
     if(args.profiler):
+        profile_generation(model, batch_size, sequence_length, iter)
 
-
-    results = benchmark_generation(model, batch_size, sequence_length, iter)
+    if(not args.profiler):
+        results = benchmark_generation(model, batch_size, sequence_length, iter)
 
     # Print results
     if(args.metrics):

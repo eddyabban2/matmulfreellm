@@ -4,3 +4,4 @@ mmfreelm.egg-info
 *.svg 
 *.stdout
 *.folded
+trace.json
