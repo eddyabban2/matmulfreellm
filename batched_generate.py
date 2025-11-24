@@ -2,6 +2,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
@@ -18,6 +19,13 @@ parser.add_argument(
     "--metrics",
     action="store_true",
     help="Produces Metrics",
+)
+
+parser.add_argument(
+    "-p", 
+    "--profiler",
+    action="store_true",
+    help="runs cuda profiler"
 )
 
 parser.add_argument(
@@ -155,6 +163,36 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=
         return results
     return None
 
+def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32, model_name='ridger/MMfreeLM-2.7B'):
+    # create random input tokens
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+
+    # run a warm up generate 
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_length=max_length,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+    
+    # profile generate 
+
+    with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+        outputs = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=max_length,
+                do_sample=True,
+                top_p=0.4,
+                temperature=0.6
+            )
+    
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
+
 def print_benchmark_results(results, model, implementation_type):
     """Print comprehensive benchmark statistics."""
     import statistics
@@ -233,6 +271,9 @@ def main():
     sequence_length=int(args.sequence_length)
     iter=int(args.iterations)
     # Run benchmark
+    if(args.profiler):
+
+
     results = benchmark_generation(model, batch_size, sequence_length, iter)
 
     # Print results
