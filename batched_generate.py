@@ -171,6 +171,40 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=
         return results
     return None
 
+def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B'):
+    """Run benchmark with multiple prompts and iterations."""
+    
+    
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+    times = []
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_length=32,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+    
+
+    for iter in range(num_iterations):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        outputs = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=1,
+            do_sample=True,
+            top_p=0.4,
+            temperature=0.6
+        )
+        torch.cuda.synchronize()
+        end_time = time.time()
+        generation_time = end_time - start_time
+        times.append(generation_time)
+    return times
+
 def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
@@ -312,7 +346,7 @@ def create_csv_data(model, sequence_length, iters):
             else:
                 cuda_time = float(cuda_time[:-1])
             flops = sum(e.flops for e in events) / run_time
-            time_to_first_token = 0
+            time_to_first_token = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
             data=[batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
             csvwriter.writerow(data) 
             if(args.metrics):
