@@ -7,6 +7,7 @@ import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import argparse
+import statistics
 
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"
@@ -45,7 +46,7 @@ parser.add_argument(
 parser.add_argument(
     "-i", 
     "--iterations",
-    default=5,
+    default=1,
     help="Determines the number of iterations to benchmark for"
 )
 
@@ -54,6 +55,12 @@ parser.add_argument (
     "--fixed_point",
     action="store_true",
     help="Switches the model to fixed point",
+)
+
+parser.add_argument(
+    "--csv",
+    action="store_true",
+    help="Generates a CSV of multiple benchmark configurations",
 )
 
 args = parser.parse_args()
@@ -128,7 +135,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=
     
 
     for iter in range(num_iterations):
-        if args.metrics:
+        if args.metrics or args.csv:
             torch.cuda.synchronize()
             start_time = time.time()
         outputs = model.generate(
@@ -139,12 +146,12 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=
             top_p=0.4,
             temperature=0.6
         )
-        if args.metrics:
+        if args.metrics or args.csv:
             torch.cuda.synchronize()
             end_time = time.time()
 
         # calculate metrics
-        if args.metrics:
+        if args.metrics or args.csv:
             generation_time = end_time - start_time
             tokens_generated = (outputs.shape[1] - seq_len)*batch_size
             tps = (tokens_generated) / generation_time
@@ -158,8 +165,9 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=
             results['tps'].append(tps)
             results['gflops_per_sec'].append(gflops_per_sec)
             results['prompt_lengths'].append(seq_len)
-            print(f"  Iteration {iter + 1}: {tps:.2f} tok/s, {gflops_per_sec:.2f} GFLOPS/s, {generation_time:.4f}s")
-    if args.metrics:
+            if args.metrics:
+                print(f"  Iteration {iter + 1}: {tps:.2f} tok/s, {gflops_per_sec:.2f} GFLOPS/s, {generation_time:.4f}s")
+    if args.metrics or args.csv:
         return results
     return None
 
@@ -179,27 +187,27 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32
         temperature=0.6)
     
     # profile generate 
-
+    outputs = None
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        with_flops=True, record_shapes=True
+        with_flops=True, record_shapes=True, profile_memory=True
     ) as prof:
-        outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=max_length,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
-
-    print(prof.key_averages().table(sort_by="flops", row_limit=10))
-    prof.export_chrome_trace("trace.json")
-
+        for _ in range(num_iterations):
+            outputs = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_length=max_length,
+                    do_sample=True,
+                    top_p=0.4,
+                    temperature=0.6
+                )
+    if args.profiler:
+        print(prof.key_averages().table(sort_by="cuda_time_total"))
+        prof.export_chrome_trace("trace.json")
+    return prof
 
 def print_benchmark_results(results, model, implementation_type):
     """Print comprehensive benchmark statistics."""
-    import statistics
 
     # Convert to tensors for easier calculation
     tps_values = results['tps']
@@ -254,6 +262,62 @@ def print_benchmark_results(results, model, implementation_type):
             print(f"  {length:<10} {avg_tps:<15.2f} {avg_gflops:<15.2f}")
 
     print(f"\n{'='*80}\n")
+def calculate_cuda_time(events):
+    print(events[0].__dict__)
+    cuda_intervals = [
+        (evt.cuda_time_range.start_time, evt.cuda_time_range.end_time)
+        for evt in events
+        if evt.device_type == torch.profiler._utils.DeviceType.CUDA
+    ]
+
+    # merge overlapping intervals
+    cuda_intervals.sort()
+    merged = []
+    for start, end in cuda_intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+
+    total_cuda_time_us = sum(end - start for start, end in merged) / 1e6 # convert to seconds
+    return total_cuda_time_us
+    
+def create_csv_data(model, sequence_length, iters):
+
+    print("Collecting Data to be used in a CSV")
+    import csv
+    fields = ['batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token(s)', 'FLOPS']
+    max_batch_power = 14
+    filename = "benchmark_results.csv"
+    with open(filename, 'w') as csvfile:
+        csvwriter = csv.writer(csvfile) 
+        csvwriter.writerow(fields)  
+        for batch_power in range(max_batch_power):
+            batch_size = 2**batch_power
+            print(f"Collecting data for batch size: {batch_size}")
+            profile_results = profile_generation(model, batch_size, sequence_length, iters)
+            benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters)
+            tps = statistics.mean(benchmark_results['tps'])
+            run_time = statistics.mean(benchmark_results['generation_time'])
+            events = profile_results.key_averages()
+            table_string = profile_results.key_averages().table().split('\n')
+            cpu_time = table_string[-3].split()[4]
+            if cpu_time.endswith('ms'):
+                cpu_time = float(cpu_time[:-2]) / 1e3
+            else:
+                cpu_time = float(cpu_time[:-1])
+            cuda_time = table_string[-2].split()[4]
+            if cuda_time.endswith('ms'):
+                cuda_time = float(cuda_time[:-2]) / 1e3
+            else:
+                cuda_time = float(cuda_time[:-1])
+            flops = sum(e.flops for e in events) / run_time
+            time_to_first_token = 0
+            data=[batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
+            csvwriter.writerow(data) 
+            if(args.metrics):
+                print_benchmark_results(benchmark_results, model, "CSV Run")
+    exit(0)
 
 
 def main():
@@ -273,16 +337,15 @@ def main():
 
     batch_size=int(args.batch_size)
     sequence_length=int(args.sequence_length)
-    iter=int(args.iterations)
+    iters=int(args.iterations)
+    if(args.csv):
+        create_csv_data(model, sequence_length, iters)
     # Run benchmark
     if(args.profiler):
-        profile_generation(model, batch_size, sequence_length, iter)
+        profile_generation(model, batch_size, sequence_length, iters)
 
-    if(not args.profiler):
-        results = benchmark_generation(model, batch_size, sequence_length, iter)
-
-    # Print results
     if(args.metrics):
+        results = benchmark_generation(model, batch_size, sequence_length, iters)
         print_benchmark_results(results, model, implementation_type)
 
 if __name__ == "__main__":

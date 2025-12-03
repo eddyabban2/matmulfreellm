@@ -5,3 +5,5 @@ mmfreelm.egg-info
 *.stdout
 *.folded
 trace.json
+*.csv
+*.txt
