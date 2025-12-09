@@ -30,6 +30,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "-q", 
+    "--quiet_run",
+    action="store_true",
+    help="runs workload without printing any output or calculating metrics"
+)
+
+parser.add_argument(
     "-b", 
     "--batch_size",
     default=64,
@@ -320,7 +327,7 @@ def create_csv_data(model, sequence_length, iters):
 
     print("Collecting Data to be used in a CSV")
     import csv
-    fields = ['batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token(s)', 'FLOPS']
+    fields = ['batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token (s)', 'FLOPS']
     max_batch_power = 14
     filename = "benchmark_results.csv"
     with open(filename, 'w') as csvfile:
@@ -381,6 +388,8 @@ def main():
     if(args.metrics):
         results = benchmark_generation(model, batch_size, sequence_length, iters)
         print_benchmark_results(results, model, implementation_type)
+    if args.quiet_run:
+        _ = benchmark_generation(model, batch_size, sequence_length, iters)
 
 if __name__ == "__main__":
     main()
