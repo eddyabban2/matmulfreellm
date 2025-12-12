@@ -1,0 +1,2 @@
+alias build_container="docker build -t mmfreelm -f mmfreelm_DockerFile ."
+alias run_container="docker run -it --rm mmfreelm bash"
