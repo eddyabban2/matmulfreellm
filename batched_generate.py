@@ -228,13 +228,12 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_length=32
         temperature=0.6)
     
     # profile generate 
-    outputs = None
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         with_flops=True, record_shapes=True, profile_memory=True
     ) as prof:
         for _ in range(num_iterations):
-            outputs = model.generate(
+            _ = model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_length=max_length,
@@ -303,31 +302,12 @@ def print_benchmark_results(results, model, implementation_type):
             print(f"  {length:<10} {avg_tps:<15.2f} {avg_gflops:<15.2f}")
 
     print(f"\n{'='*80}\n")
-def calculate_cuda_time(events):
-    print(events[0].__dict__)
-    cuda_intervals = [
-        (evt.cuda_time_range.start_time, evt.cuda_time_range.end_time)
-        for evt in events
-        if evt.device_type == torch.profiler._utils.DeviceType.CUDA
-    ]
-
-    # merge overlapping intervals
-    cuda_intervals.sort()
-    merged = []
-    for start, end in cuda_intervals:
-        if not merged or start > merged[-1][1]:
-            merged.append([start, end])
-        else:
-            merged[-1][1] = max(merged[-1][1], end)
-
-    total_cuda_time_us = sum(end - start for start, end in merged) / 1e6 # convert to seconds
-    return total_cuda_time_us
     
 def create_csv_data(model, sequence_length, iters):
-
+    device = torch.cuda.get_device_name(torch.cuda.current_device())
     print("Collecting Data to be used in a CSV")
     import csv
-    fields = ['batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token (s)', 'FLOPS']
+    fields = ['device', 'batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token (s)', 'FLOPS']
     max_batch_power = 14
     filename = "benchmark_results.csv"
     with open(filename, 'w') as csvfile:
@@ -354,7 +334,7 @@ def create_csv_data(model, sequence_length, iters):
                 cuda_time = float(cuda_time[:-1])
             flops = sum(e.flops for e in events) / run_time
             time_to_first_token = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
-            data=[batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
+            data=[device, batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
             csvwriter.writerow(data) 
             if(args.metrics):
                 print_benchmark_results(benchmark_results, model, "CSV Run")
