@@ -1,3 +1,4 @@
+#!/home/eabban/venv/bin/python3
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
@@ -8,6 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import argparse
 import statistics
+import zeus 
 
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"
