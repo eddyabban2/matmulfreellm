@@ -153,7 +153,8 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         results['tps'].append(tps)
         results['gflops_per_sec'].append(gflops_per_sec)
         results['prompt_lengths'].append(seq_len)
-    return results
+    row['tokens_per_second'] = statistics.mean(results['tps'])
+    row['run_time_seconds'] = statistics.mean(results["generation_time"])
 
 def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B'):
     """Run benchmark with multiple prompts and iterations."""
@@ -189,7 +190,7 @@ def first_token_time(model, batch_size, seq_len, num_iterations, model_name='rid
         times.append(generation_time)
     return times
 
-def profile_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, model_name='ridger/MMfreeLM-2.7B'):
+def profile_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
     input_ids = batch["input_ids"].cuda()
@@ -218,7 +219,22 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
                     top_p=0.4,
                     temperature=0.6
                 )
-    return prof
+    events = prof.key_averages()
+    table_string = prof.key_averages().table().split('\n')
+    cpu_time = table_string[-3].split()[4]
+    if cpu_time.endswith('ms'):
+        cpu_time = float(cpu_time[:-2]) / 1e3
+    else:
+        cpu_time = float(cpu_time[:-1])
+    cuda_time = table_string[-2].split()[4]
+    if cuda_time.endswith('ms'):
+        cuda_time = float(cuda_time[:-2]) / 1e3
+    else:
+        cuda_time = float(cuda_time[:-1])
+    flops = sum(e.flops for e in events) / float(row['run_time_seconds'])
+    row["FLOPS"] = flops
+    row ["CPU_time_seconds"] = cpu_time
+    row["CUDA_time_seconds"] = cuda_time
 
 def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
@@ -250,7 +266,6 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
                 top_p=0.4,
                 temperature=0.6
             )
-    print("Waiting for power data to be collected...")
     mes = monitor.end_window(window_key, sync_execution=True)
     end_time = time.time()
     timeline = power_monitor.get_power_timeline(
@@ -283,28 +298,9 @@ def create_csv_data(model, sequence_length, iters, max_new_tokens):
             row = {'device': device, 'batch size': batch_size}
             print(f"Collecting data for batch size: {batch_size}")
             benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens)
+            profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
             time_to_first_token = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
             get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            print("\tCalculating Metrics")
-            tps = statistics.mean(benchmark_results['tps'])
-            run_time = statistics.mean(benchmark_results['generation_time'])
-            events = profile_results.key_averages()
-            table_string = profile_results.key_averages().table().split('\n')
-            cpu_time = table_string[-3].split()[4]
-            if cpu_time.endswith('ms'):
-                cpu_time = float(cpu_time[:-2]) / 1e3
-            else:
-                cpu_time = float(cpu_time[:-1])
-            cuda_time = table_string[-2].split()[4]
-            if cuda_time.endswith('ms'):
-                cuda_time = float(cuda_time[:-2]) / 1e3
-            else:
-                cuda_time = float(cuda_time[:-1])
-            flops = sum(e.flops for e in events) / run_time
-            # data=[device, batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
-            # for key, value in mydict.items():
-            #     writer.writerow([key, value])
             if(first_row):
                 csvwriter = csv.DictWriter(csvfile, row.keys())
                 csvwriter.writeheader()
