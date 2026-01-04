@@ -220,7 +220,7 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
                 )
     return prof
 
-def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, model_name='ridger/MMfreeLM-2.7B'):
+def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
     input_ids = batch["input_ids"].cuda()
@@ -259,36 +259,33 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, m
         start_time=start_time,
         end_time=end_time
     )
-    metrics = {}
     for gpu_idx, data in timeline.items():
         powers = [power_watts for timestamp, power_watts in data]
-        metrics['average_power_watts'] = sum(powers) / len(powers)
-        metrics['max_power_watts'] = max(powers)
-        metrics['min_power_watts'] = min(powers)
-    metrics['total_energy_joules'] = mes.gpu_energy[0]
-    metrics['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
-    metrics['joules_per_token'] = metrics['energy_per_iteration_joules'] / (batch_size * max_new_tokens * num_iterations)
-    return metrics
-
+        row['average_power_watts'] = sum(powers) / len(powers)
+        row['max_power_watts'] = max(powers)
+        row['min_power_watts'] = min(powers)
+    row['total_energy_joules'] = mes.gpu_energy[0]
+    row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
+    row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens * num_iterations)
 
 def create_csv_data(model, sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     print("Collecting Data to be used in a CSV")
-    first_row = False
+    first_row = True
 
     max_batch_power = int(args.max_batch_power)
-    filename = "benchmark_results.csv"
+    from datetime import datetime
+    filename =  'benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
-        csvwriter = csv.writer(csvfile) 
-        csvwriter.writerow(fields)  
+        csvwriter = None  
         for batch_power in range(max_batch_power):
             batch_size = 2**batch_power
             row = {'device': device, 'batch size': batch_size}
             print(f"Collecting data for batch size: {batch_size}")
-            get_power_data(model, batch_size, sequence_length, iters, max_new_tokens)
+            benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
             profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens)
-            benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens)
             time_to_first_token = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
+            get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row)
             print("\tCalculating Metrics")
             tps = statistics.mean(benchmark_results['tps'])
             run_time = statistics.mean(benchmark_results['generation_time'])
@@ -306,10 +303,12 @@ def create_csv_data(model, sequence_length, iters, max_new_tokens):
                 cuda_time = float(cuda_time[:-1])
             flops = sum(e.flops for e in events) / run_time
             # data=[device, batch_size, tps, run_time, cuda_time, cpu_time, time_to_first_token, flops]
-            for key, value in mydict.items():
-                writer.writerow([key, value])
+            # for key, value in mydict.items():
+            #     writer.writerow([key, value])
             if(first_row):
-                csv.write
+                csvwriter = csv.DictWriter(csvfile, row.keys())
+                csvwriter.writeheader()
+                first_row = False
             csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
