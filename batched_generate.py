@@ -1,4 +1,3 @@
-#!/home/eabban/venv/bin/python3
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
@@ -6,6 +5,7 @@ import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
+from bench_utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
@@ -48,7 +48,7 @@ parser.add_argument(
 parser.add_argument(
     "-s", 
     "--sequence_length",
-    default=10,
+    default=1,
     help="sets the sequence length of input tokens"
 )
 
@@ -72,6 +72,12 @@ parser.add_argument(
     help="Generates a CSV of multiple benchmark configurations",
 )
 
+parser.add_argument(
+    "--max_batch_power", 
+    default=5,
+    help="stores the maximum batch power to go up to when profiling",
+)
+
 args = parser.parse_args()
 
 if not args.metrics:
@@ -93,21 +99,6 @@ def calculate_model_flops(model, num_tokens):
     # Each parameter is used twice per token (forward multiply-add)
     flops = 2 * num_params * num_tokens
     return flops, num_params
-
-def generate_random_input_ids(model_name, batch_size, sequence_length):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    vocab_size = len(tokenizer.vocab)
-
-    input_ids = torch.randint(0, vocab_size, (batch_size, sequence_length), dtype=torch.long)
-
-    # 3. Generate attention mask (typically all ones for fully valid random inputs)
-    # attention_mask shape: (batch_size, sequence_length)
-    attention_mask = torch.ones((batch_size, sequence_length), dtype=torch.long)
-
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask
-    }
 
 def benchmark_generation(model, batch_size, seq_len, num_iterations, max_length=32, model_name='ridger/MMfreeLM-2.7B'):
     """Run benchmark with multiple prompts and iterations."""
@@ -310,7 +301,7 @@ def create_csv_data(model, sequence_length, iters):
     print("Collecting Data to be used in a CSV")
     import csv
     fields = ['device', 'batch size', '(benchmark)tokens per second', '(benchmark) wall clock time (s)', 'cuda time (s)', 'cpu time (s)', 'time to first token (s)', 'FLOPS']
-    max_batch_power = 14
+    max_batch_power = int(args.max_batch_power)
     filename = "benchmark_results.csv"
     with open(filename, 'w') as csvfile:
         csvwriter = csv.writer(csvfile) 
