@@ -45,7 +45,7 @@ parser.add_argument (
 
 parser.add_argument(
     "--min_batch_power", 
-    default=1,
+    default=0,
     help="stores the minimum batch power to go up to when profiling",
 )
 
@@ -282,8 +282,9 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens * num_iterations)
 
-def create_csv_data(model, sequence_length, iters, max_new_tokens):
+def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
+    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -292,41 +293,36 @@ def create_csv_data(model, sequence_length, iters, max_new_tokens):
     filename =  'benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        for batch_power in range(min_batch_power, max_batch_power):
-            batch_size = 2**batch_power
-            row = {'device': device, 'batch size': batch_size}
-            print(f"Collecting data for batch size: {batch_size}")
-            benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
-            get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            if(first_row):
-                csvwriter = csv.DictWriter(csvfile, row.keys())
-                csvwriter.writeheader()
-                first_row = False
-            csvwriter.writerow(row) 
+        for model_name in models:
+            row = {'device': device, 'model': model_name}
+            print(f"Collecting data for model: {model_name}")
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+            for batch_power in range(min_batch_power, max_batch_power):
+                batch_size = 2**batch_power
+                row['batch size'] = batch_size
+                print(f"\tCollecting data for batch size: {batch_size}")
+                benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
+                get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                if(first_row):
+                    csvwriter = csv.DictWriter(csvfile, row.keys())
+                    csvwriter.writeheader()
+                    first_row = False
+                csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
 def main():
-    name = 'ridger/MMfreeLM-2.7B'
-    tokenizer = AutoTokenizer.from_pretrained(name)
-    model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
     if args.fixed_point:
-        from generate_integrated import replace_with_fixed_point_hgrn
-        # Replace HGRN layers with fixed-point implementation
-        model = replace_with_fixed_point_hgrn(model)
-        implementation_type = "Fixed-Point HGRN"
-        print("fixed point is currently broken exiting")
+        print("fixed point not yet supported")
         quit()
-
-    else:
-        implementation_type = "Floating-Point"
 
     sequence_length=int(args.sequence_length)
     iters=int(args.iterations)
     max_new_tokens=int(args.max_new_tokens)
     
-    create_csv_data(model, sequence_length, iters, max_new_tokens)
+    create_csv_data(sequence_length, iters, max_new_tokens)
 
 if __name__ == "__main__":
     main()
