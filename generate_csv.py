@@ -29,7 +29,6 @@ parser.add_argument(
     help="sets the sequence length of input tokens"
 )
 
-
 parser.add_argument(
     "-i", 
     "--iterations",
@@ -42,6 +41,12 @@ parser.add_argument (
     "--fixed_point",
     action="store_true",
     help="Switches the model to fixed point",
+)
+
+parser.add_argument(
+    "--min_batch_power", 
+    default=1,
+    help="stores the minimum batch power to go up to when profiling",
 )
 
 parser.add_argument(
@@ -107,10 +112,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     
     results = {
             'tps': [],
-            'generation_time': [],
-            'tokens_generated': [],
-            'gflops_per_sec': [],
-            'prompt_lengths': []
+            'generation_time': []
         }
     
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
@@ -149,10 +151,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         gflops_per_sec = flops_per_second / 1e9
 
         results['generation_time'].append(generation_time)
-        results['tokens_generated'].append(tokens_generated)
         results['tps'].append(tps)
-        results['gflops_per_sec'].append(gflops_per_sec)
-        results['prompt_lengths'].append(seq_len)
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
 
@@ -287,19 +286,19 @@ def create_csv_data(model, sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     print("Collecting Data to be used in a CSV")
     first_row = True
-
+    min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     from datetime import datetime
     filename =  'benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        for batch_power in range(max_batch_power):
+        for batch_power in range(min_batch_power, max_batch_power):
             batch_size = 2**batch_power
             row = {'device': device, 'batch size': batch_size}
             print(f"Collecting data for batch size: {batch_size}")
             benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
             profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row)
-            time_to_first_token = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
+            row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters))
             get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row)
             if(first_row):
                 csvwriter = csv.DictWriter(csvfile, row.keys())
