@@ -7,3 +7,4 @@ mmfreelm.egg-info
 trace.json
 *.csv
 *.txt
+graphs/

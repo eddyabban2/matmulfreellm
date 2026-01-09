@@ -285,7 +285,8 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
+    # models = ['ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
+    models = ['ridger/MMfreeLM-370M']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -298,14 +299,19 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
             row = {'device': device, 'model': model_name}
             print(f"Collecting data for model: {model_name}")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+            # model = AutoModelForCausalLM.from_pretrained(model_name).cuda().quarter()
+            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()1
             for batch_power in range(min_batch_power, max_batch_power):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
+                print(f"\t\tRunning Benchmarks...")
                 benchmark_results = benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                print(f"\t\tRunning Profiling Tools...")
                 profile_results = profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                print(f"\t\tCollecting time to first token data...")
                 row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
+                print(f"\t\tGetting power data...")
                 get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())

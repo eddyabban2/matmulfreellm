@@ -2,7 +2,7 @@
 Used to create graphs 
 
 Example Run: 
-python create_graphs.py --csv_file benchmark_results-2026-01-07_19:22:58.csv
+python create_graphs.py --csv_file results.csv
 """
 
 import csv
@@ -71,6 +71,9 @@ def main():
     create_batch_power_graph(data_points, "run_time_seconds")
     create_batch_power_graph(data_points, "total_energy_joules")
     create_batch_power_graph(data_points, "joules_per_token")
+    create_batch_power_graph(data_points, "joules_per_token")
+    create_batch_power_graph(data_points, "FLOPS")
+
 
 
 
