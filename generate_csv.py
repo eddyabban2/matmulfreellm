@@ -97,16 +97,6 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
                 )
     return prof
 
-def calculate_model_flops(model, num_tokens):
-    """
-    Estimate FLOPS for model generation.
-    For transformer models: FLOPS ≈ 2 * num_params * num_tokens
-    """
-    num_params = sum(p.numel() for p in model.parameters())
-    # Each parameter is used twice per token (forward multiply-add)
-    flops = 2 * num_params * num_tokens
-    return flops, num_params
-
 def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     """Run benchmark with multiple prompts and iterations."""
     
@@ -145,10 +135,6 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         generation_time = end_time - start_time
         tokens_generated = (outputs.shape[1] - seq_len)*batch_size
         tps = (tokens_generated) / generation_time
-
-        total_flops, _ = calculate_model_flops(model, tokens_generated)
-        flops_per_second = total_flops / generation_time
-        gflops_per_sec = flops_per_second / 1e9
 
         results['generation_time'].append(generation_time)
         results['tps'].append(tps)
