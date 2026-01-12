@@ -5,28 +5,43 @@
 # - attempting to call class LayerNormLinearFn(torch.autograd.Function):
 #from torch.third_party.flash_attention.flash_attn.ops.triton.layer_norm import LayerNormLinearFn
 import torch
-
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from mmfreelm.ops.fusedbitnet import layer_norm_linear_quant_fn
+import argparse
+
+
+parser.add_argument(
+    "-b", 
+    "--batch_size",
+    default=32,
+    help="sets the sequence length of input tokens"
+)
+
+data_types = [ torch.float32,torch.float16,torch.bfloat16 ]
+
 
 # Choose device
 device = "cuda" if torch.cuda.is_available() else "cpu"   # must be CUDA for Triton kernels
 device_name = torch.cuda.get_device_name(torch.cuda.current_device())
+model_name = 'ridger/MMfreeLM-2.7B'
+model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+dimensions = int(model.config.hidden_size)
 
 # Example sizes
-B = 2       # batch
-D = 64      # feature dim (must be reasonably small for the demo)
-O = 64      # output dim for the linear layer
+B = args.batch_size       # batch
+D = dimensions      # feature dim (must be reasonably small for the demo)
+O = dimensions      # output dim for the linear layer
 
 # Create inputs on device (float32 or float16). Triton kernels expect CUDA tensors.
-x = torch.randn(B, D, device=device, dtype=torch.float32)
+x = torch.randn(B, D, device=device, dtype=data_types)
 
 # Layer norm params (per-feature)
-norm_weight = torch.ones(D, device=device, dtype=torch.float32)
-norm_bias = torch.zeros(D, device=device, dtype=torch.float32)
+norm_weight = torch.ones(D, device=device, dtype=data_types)
+norm_bias = torch.zeros(D, device=device, dtype=data_types)
 
 # Linear layer params
-linear_weight = torch.randn(O, D, device=device, dtype=torch.float32)
-linear_bias = torch.zeros(O, device=device, dtype=torch.float32)
+linear_weight = torch.randn(O, D, device=device, dtype=data_types)
+linear_bias = torch.zeros(O, device=device, dtype=data_types)
 
 # Forward call
 # is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)

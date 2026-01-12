@@ -2,7 +2,7 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    python generate_csv.py -s 32 --max_new_tokens 32 -i 5 --min_batch_power 0 --max_batch_power 1
+    python generate_csv.py -s 32 --max_new_tokens 32 -i 15 --min_batch_power 0 --max_batch_power 12
 
 """
 
@@ -309,9 +309,9 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
 
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
+    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
     # models = ['ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-370M']
+    #models = ['ridger/MMfreeLM-370M']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -336,7 +336,6 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
                 profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 print(f"\t\tCollecting time to first token data...")
                 row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
-                print(f"\t\tGetting power data...")
                 # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
