@@ -72,7 +72,7 @@ def main():
     create_batch_power_graph(data_points, "total_energy_joules")
     create_batch_power_graph(data_points, "joules_per_token")
     create_batch_power_graph(data_points, "joules_per_token")
-    create_batch_power_graph(data_points, "FLOPS")
+    # create_batch_power_graph(data_points, "FLOPS")
 
 
 

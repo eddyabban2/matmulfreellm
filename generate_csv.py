@@ -136,7 +136,6 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         temperature=0.6)
     
     for iter in range(num_iterations):
-        monitor.begin_window(window_key, sync_execution=True)
         start_time = time.time()
         torch.cuda.synchronize()
         outputs = model.generate(
@@ -148,7 +147,6 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
             temperature=0.6
         )
         torch.cuda.synchronize()
-        mes = monitor.end_window(window_key, sync_execution=True)
         end_time = time.time()
 
         generation_time = end_time - start_time
@@ -157,26 +155,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
 
         results['generation_time'].append(generation_time)
         results['tps'].append(tps)
-
-        timeline = power_monitor.get_power_timeline(
-            power_domain="device_instant",  # or "device_average" or "memory_average"
-            gpu_index=0,  # specify GPU, or None for all GPUs
-            start_time=start_time,
-            end_time=end_time)
-        for gpu_idx, data in timeline.items():
-            powers = [power_watts for timestamp, power_watts in data]
-            results['average_power_watts'].append(sum(powers) / len(powers))
-            results['max_power_watts'].append(max(powers))
-            results['min_power_watts'].append(min(powers))
-
-        results['total_energy_joules'].append(mes.gpu_energy[0])
-        results['joules_per_token'].append(mes.gpu_energy[0] / (batch_size * max_new_tokens))
         
-    row['average_power_watts'] = statistics.mean(results['average_power_watts'])
-    row['max_power_watts'] = statistics.mean(results['max_power_watts'])
-    row['min_power_watts'] = statistics.mean(results['min_power_watts'])
-    row['total_energy_joules'] = statistics.mean(results['total_energy_joules'])
-    row['joules_per_token'] = statistics.mean(results['joules_per_token'])
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
 
@@ -305,13 +284,12 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
         row['min_power_watts'] = min(powers)
     row['total_energy_joules'] = mes.gpu_energy[0]
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
-    row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens * num_iterations)
+    row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    # models = ['ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    #models = ['ridger/MMfreeLM-370M']
+    #models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
+    models = ['ridger/MMfreeLM-1.3B']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -324,19 +302,30 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
             row = {'device': device, 'model': model_name}
             print(f"Collecting data for model: {model_name}")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            # model = AutoModelForCausalLM.from_pretrained(model_name).cuda().quarter()
             model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
             for batch_power in range(min_batch_power, max_batch_power):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
                 print(f"\t\tRunning Benchmarks...")
+                start_time = time.time()
                 benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                print(f"\t\tRunning Profiling Tools...")
-                profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                end_time = time.time()
+                print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+
+                # profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+
                 print(f"\t\tCollecting time to first token data...")
+                start_time = time.time()
                 row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
-                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                end_time = time.time()
+                print(f"\t\t\tTTTFL completed in {end_time-start_time} sec")
+
+                print("\t\t Collecting Power data")
+                start_time = time.time()
+                get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                end_time = time.time()
+                print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()
