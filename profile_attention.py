@@ -52,6 +52,7 @@ norm_bias = torch.zeros(D, device=device, dtype=data_type)
 linear_weight = torch.randn(O, D, device=device, dtype=data_type)
 linear_bias = torch.zeros(O, device=device, dtype=data_type)
 
+print("attempting to profile generation")
 
 # profile generate 
 with profile(

@@ -15,7 +15,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
     batch_size = 1
     sequence_length = 1
-    # input token is "enough"
     example_input_token = torch.load('example_input_tensor.pt')
     print(f"Input Tokens: {tokenizer.batch_decode(example_input_token, skip_special_tokens=True)[0]}")
 
