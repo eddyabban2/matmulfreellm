@@ -4,7 +4,7 @@ mmfreelm.egg-info
 *.svg 
 *.stdout
 *.folded
-trace.json
+trace*.json
 *.csv
 *.txt
 graphs/

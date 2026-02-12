@@ -21,6 +21,13 @@ parser.add_argument(
     help="sets the sequence length of input tokens"
 )
 
+parser.add_argument(
+    "-i", 
+    "--iterations",
+    default=10,
+    help="sets the number of iterations to run attention for"
+)
+
 args = parser.parse_args()
 
 #data_type = [ torch.float32,torch.float16,torch.bfloat16 ]
@@ -64,3 +71,17 @@ out = layer_norm_linear_quant_fn(
     residual_in_fp32=False,
     is_rms_norm=True,
 )
+iter = int(args.iterations)
+for _ in range(iter):
+    _ = layer_norm_linear_quant_fn(
+        x,
+        norm_weight,
+        norm_bias,
+        linear_weight,
+        linear_bias,
+        residual=None,
+        eps=1e-6,
+        prenorm=False,
+        residual_in_fp32=False,
+        is_rms_norm=True,
+    )

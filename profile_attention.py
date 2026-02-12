@@ -1,5 +1,3 @@
-#!/opt/miniconda3/envs/dejavu/bin/python
-
 # on H100 server python is stored at /opt/miniconda3/envs/dejavu/bin/python
 # attention module we are calling is stored in:
 # -  /home/victoryang00/pytorch/third_party/flash-attention/flash_attn/ops/triton/layer_norm.py
@@ -10,6 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from mmfreelm.ops.fusedbitnet import layer_norm_linear_quant_fn
 import argparse
 from torch.profiler import profile, record_function, ProfilerActivity
+from datetime import datetime
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -75,6 +74,9 @@ with profile(
     )
     
 
-
+trace_filename =  'trace-{date:%Y-%m-%d_%H:%M:%S}.json'.format(date=datetime.now())
+prof.export_chrome_trace(trace_filename)
 print(prof.key_averages().table(sort_by="cuda_time_total"))
-prof.export_chrome_trace("trace.json")
+key_avg_filename =  'attention_profile-{date:%Y-%m-%d_%H:%M:%S}.txt'.format(date=datetime.now())
+with open(key_avg_filename, "w") as f:
+  f.write(prof.key_averages().table(sort_by="cuda_time_total"))
