@@ -16,7 +16,8 @@ def calculate_model_flops(model, num_tokens):
     flops = 2 * num_params * num_tokens
     return flops, num_params
 
-def benchmark_generation(model, tokenizer, prompts, max_length=32, num_iterations=5):
+        
+def benchmark_generation(model, tokenizer, prompts, max_length=32, num_iterations=5, batches=64):
     """Run benchmark with multiple prompts and iterations."""
     results = {
         'tps': [],
@@ -47,14 +48,15 @@ def benchmark_generation(model, tokenizer, prompts, max_length=32, num_iteration
         for iteration in range(num_iterations):
             torch.cuda.synchronize()
             start_time = time.time()
-            outputs = model.generate(input_ids, max_length=max_length, do_sample=True, top_p=0.4, temperature=0.6)
+           # print(input_ids.shape, input_ids.repeat(batches,1))
+            outputs = model.generate(input_ids.repeat(batches, 1), max_length=max_length, do_sample=True, top_p=0.4, temperature=0.6)
             torch.cuda.synchronize()
             end_time = time.time()
 
             # Calculate metrics
             generation_time = end_time - start_time
-            output_length = outputs.shape[1]
-            tokens_generated = output_length - prompt_length
+            output_length = outputs.shape[1]*outputs.shape[0]
+            tokens_generated = output_length - prompt_length*batches
             tokens_per_second = tokens_generated / generation_time
 
             # Calculate FLOPS
@@ -151,7 +153,7 @@ def main():
         from generate_integrated import replace_with_fixed_point_hgrn
 
         # Load model
-        name = 'ridger/MMfreeLM-2.7B'
+        name = 'ridger/MMfreeLM-370M'
         tokenizer = AutoTokenizer.from_pretrained(name)
         model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
 
@@ -163,27 +165,33 @@ def main():
     else:
         print("Using standard floating-point implementation...")
         # Original implementation
-        name = 'ridger/MMfreeLM-2.7B'
+        name = 'ridger/MMfreeLM-370M'
         tokenizer = AutoTokenizer.from_pretrained(name)
         model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
 
         implementation_type = "Floating-Point"
 
     # Run benchmark
-    results = benchmark_generation(model, tokenizer, prompts, max_length=32, num_iterations=5)
+    batches = 200
+    results = benchmark_generation(model, tokenizer, prompts, max_length=32, num_iterations=5, batches=batches)
 
     # Print results
     print_benchmark_results(results, model, implementation_type)
 
     # Show a sample generation
     print(f"{'='*80}")
-    print(f"SAMPLE GENERATION")
+    print(f"SAMPLE GENERATION (5 batches)")
     print(f"{'='*80}")
+    batches = 5
     sample_prompt = prompts[1]
     input_ids = tokenizer(sample_prompt, return_tensors="pt").input_ids.cuda()
-    outputs = model.generate(input_ids, max_length=32, do_sample=True, top_p=0.4, temperature=0.6)
+    outputs = model.generate(input_ids.repeat(batches, 1), max_length=45, do_sample=True, top_p=0.4, temperature=2.0)
     print(f"\nInput:  {sample_prompt}")
-    print(f"Output: {tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]}")
+    for output in outputs:
+        #print(output)
+        
+        text = tokenizer.batch_decode([output], skip_special_tokens=True)[0]
+        print(f"Output: {text}")
 
     if use_fixed_point:
         print("\n✓ Benchmark completed using fixed-point HGRN with ternary_matmul operations!")

@@ -125,5 +125,6 @@ class RecurrentCache(Cache):
         cache = cls(seen_tokens)
         if past_key_values is not None:
             for layer_idx in range(len(past_key_values)):
+                #print(dir(past_key_values), type(past_key_values))
                 cache.update(past_key_values[layer_idx], layer_idx)
         return cache
