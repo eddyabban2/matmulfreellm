@@ -9,3 +9,6 @@ trace*.json
 *.txt
 graphs/
 *.png
+venv/
+*.nsys-rep
+*.qdstrm
