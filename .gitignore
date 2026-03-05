@@ -12,3 +12,4 @@ graphs/
 venv/
 *.nsys-rep
 *.qdstrm
+nsys_runs/

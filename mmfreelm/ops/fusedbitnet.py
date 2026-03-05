@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+import nvtx
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
@@ -430,42 +431,43 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
         residual_in_fp32=False,
         is_rms_norm=False,
     ):
-        x_shape_og = x.shape
-        # reshape input data into 2D tensor
-        x = x.reshape(-1, x.shape[-1])
-        if residual is not None:
-            assert residual.shape == x_shape_og
-            residual = residual.reshape(-1, residual.shape[-1])
-        residual_dtype = (
-            residual.dtype
-            if residual is not None
-            else (torch.float32 if residual_in_fp32 else None)
-        )
-        y, mean, rstd, residual_out = _layer_norm_fwd_quant(
-            x,
-            norm_weight,
-            norm_bias,
-            eps,
-            residual,
-            out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
-            residual_dtype=residual_dtype,
-            is_rms_norm=is_rms_norm,
-        )
-        y = y.reshape(x_shape_og)
-        dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
-        linear_weight = weight_quant(linear_weight).to(dtype)
-        linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
-        out = F.linear(y.to(linear_weight.dtype), linear_weight, linear_bias)
-        # We don't store y, will be recomputed in the backward pass to save memory
-        ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
-        ctx.x_shape_og = x_shape_og
-        ctx.eps = eps
-        ctx.is_rms_norm = is_rms_norm
-        ctx.has_residual = residual is not None
-        ctx.prenorm = prenorm
-        ctx.x_dtype = x.dtype
-        ctx.linear_bias_is_none = linear_bias is None
-        return out if not prenorm else (out, residual_out.reshape(x_shape_og))
+        with nvtx.annotate("LayerNormLinearQuantFn fused"):
+            x_shape_og = x.shape
+            # reshape input data into 2D tensor
+            x = x.reshape(-1, x.shape[-1])
+            if residual is not None:
+                assert residual.shape == x_shape_og
+                residual = residual.reshape(-1, residual.shape[-1])
+            residual_dtype = (
+                residual.dtype
+                if residual is not None
+                else (torch.float32 if residual_in_fp32 else None)
+            )
+            y, mean, rstd, residual_out = _layer_norm_fwd_quant(
+                x,
+                norm_weight,
+                norm_bias,
+                eps,
+                residual,
+                out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
+                residual_dtype=residual_dtype,
+                is_rms_norm=is_rms_norm,
+            )
+            y = y.reshape(x_shape_og)
+            dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
+            linear_weight = weight_quant(linear_weight).to(dtype)
+            linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
+            out = F.linear(y.to(linear_weight.dtype), linear_weight, linear_bias)
+            # We don't store y, will be recomputed in the backward pass to save memory
+            ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
+            ctx.x_shape_og = x_shape_og
+            ctx.eps = eps
+            ctx.is_rms_norm = is_rms_norm
+            ctx.has_residual = residual is not None
+            ctx.prenorm = prenorm
+            ctx.x_dtype = x.dtype
+            ctx.linear_bias_is_none = linear_bias is None
+            return out if not prenorm else (out, residual_out.reshape(x_shape_og))
 
     @staticmethod
     @contiguous
@@ -566,19 +568,20 @@ class BitLinear(nn.Linear):
             An output tensor with shape [n, d].
         """
         # Weight tensor
-        w = self.weight
+        with nvtx.annotate("BitLinear Unfused"):
+            w = self.weight
 
-        # Apply RMS normalization to the input
-        x_norm = self.norm(x)
+            # Apply RMS normalization to the input
+            x_norm = self.norm(x)
 
-        # Apply quantization to both activations and weights
-        # Uses Straight-Through Estimator (STE) trick with .detach() for gradient flow
-        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
-        w_quant = w + (weight_quant(w) - w).detach()
-        # Perform linear operation with quantized values
-        y = F.linear(x_quant, w_quant)
+            # Apply quantization to both activations and weights
+            # Uses Straight-Through Estimator (STE) trick with .detach() for gradient flow
+            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+            w_quant = w + (weight_quant(w) - w).detach()
+            # Perform linear operation with quantized values
+            y = F.linear(x_quant, w_quant)
 
-        return y
+            return y
 
 
 class FusedBitLinear(BitLinear):
