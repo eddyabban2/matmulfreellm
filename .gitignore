@@ -9,6 +9,7 @@ trace*.json
 *.txt
 graphs/
 *.png
+*.sqlite
 venv/
 *.nsys-rep
 *.qdstrm

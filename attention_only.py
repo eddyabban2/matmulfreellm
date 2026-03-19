@@ -59,21 +59,8 @@ linear_bias = torch.zeros(O, device=device, dtype=data_type)
 
 # Forward call
 # is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
-out = layer_norm_linear_quant_fn(
-    x,
-    norm_weight,
-    norm_bias,
-    linear_weight,
-    linear_bias,
-    residual=None,
-    eps=1e-6,
-    prenorm=False,
-    residual_in_fp32=False,
-    is_rms_norm=True,
-)
-iter = int(args.iterations)
-for _ in range(iter):
-    _ = layer_norm_linear_quant_fn(
+with nvtx.annotate("warmup", color="white"):
+    out = layer_norm_linear_quant_fn(
         x,
         norm_weight,
         norm_bias,
@@ -85,3 +72,18 @@ for _ in range(iter):
         residual_in_fp32=False,
         is_rms_norm=True,
     )
+iter = int(args.iterations)
+with nvtx.annotate("workload", color="cyan"):
+    for _ in range(iter):
+        _ = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
