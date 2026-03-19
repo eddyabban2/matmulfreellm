@@ -52,9 +52,10 @@ class HGRNBitMLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
-        y = self.gate_proj(x)
-        gate, y = y.chunk(2, -1)
-        return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
+        with nvtx.annotate("HGRNBitMLP", color="purple"):
+            y = self.gate_proj(x)
+            gate, y = y.chunk(2, -1)
+            return swiglu_linear(gate, y, self.down_proj.weight, self.down_proj.bias)
 
 
 class HGRNBitBlock(nn.Module):

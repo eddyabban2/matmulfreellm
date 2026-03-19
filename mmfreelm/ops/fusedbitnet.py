@@ -8,6 +8,8 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 import nvtx
+import traceback
+import sys
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
@@ -431,7 +433,13 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
         residual_in_fp32=False,
         is_rms_norm=False,
     ):
-        with nvtx.annotate("LayerNormLinearQuantFn fused"):
+        annotation_name = "LayerNormLinearQuantFn"
+        if(residual != None):
+            annotation_name += " residual"
+        if(is_rms_norm):
+            annotation_name += " is rms norm"
+
+        with nvtx.annotate(annotation_name, color="red"):
             x_shape_og = x.shape
             # reshape input data into 2D tensor
             x = x.reshape(-1, x.shape[-1])
@@ -568,7 +576,7 @@ class BitLinear(nn.Linear):
             An output tensor with shape [n, d].
         """
         # Weight tensor
-        with nvtx.annotate("BitLinear Unfused"):
+        with nvtx.annotate("BitLinear Unfused", color="grey"):
             w = self.weight
 
             # Apply RMS normalization to the input

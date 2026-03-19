@@ -139,7 +139,7 @@ class FusedRecurrentHGRNFunction(torch.autograd.Function):
     @staticmethod
     @contiguous
     def forward(ctx, x, g, initial_state=None, output_final_state=False):
-        with nvtx.annotate("Fused Recurrent HGRNF Unfused"):
+        with nvtx.annotate("Fused Recurrent HGRNF Unfused", color="orange"):
             B, H, T, D = x.shape
 
             final_state = None

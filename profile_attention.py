@@ -1,3 +1,4 @@
+#!/home/eabban/matmulfreellm/venv/bin/python
 # on H100 server python is stored at /opt/miniconda3/envs/dejavu/bin/python
 # attention module we are calling is stored in:
 # -  /home/victoryang00/pytorch/third_party/flash-attention/flash_attn/ops/triton/layer_norm.py
@@ -54,29 +55,38 @@ linear_bias = torch.zeros(O, device=device, dtype=data_type)
 print("attempting to profile generation")
 
 # profile generate 
-with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    with_flops=True, record_shapes=True, profile_memory=True
-) as prof:
-    # Forward call
-    # is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
-    out = layer_norm_linear_quant_fn(
-        x,
-        norm_weight,
-        norm_bias,
-        linear_weight,
-        linear_bias,
-        residual=None,
-        eps=1e-6,
-        prenorm=False,
-        residual_in_fp32=False,
-        is_rms_norm=True,
-    )
-    
 
-trace_filename =  'trace-{date:%Y-%m-%d_%H:%M:%S}.json'.format(date=datetime.now())
-prof.export_chrome_trace(trace_filename)
-print(prof.key_averages().table(sort_by="cuda_time_total"))
-key_avg_filename =  'attention_profile-{date:%Y-%m-%d_%H:%M:%S}.txt'.format(date=datetime.now())
-with open(key_avg_filename, "w") as f:
-  f.write(prof.key_averages().table(sort_by="cuda_time_total"))
+# Forward call
+# is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
+with nvtx.annotate("warmup", color="white"):
+    for _ in range(5):
+        out = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
+
+
+with nvtx.annotate("workload", color="cyan"):
+    for _ in range(5):
+        out = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
+
+

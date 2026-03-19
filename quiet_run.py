@@ -1,3 +1,4 @@
+#!/opt/miniconda3/envs/dejavu/bin/python
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
@@ -75,27 +76,27 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 
 
-
-# run a warm up generate
-for _ in range(5):
-
-    _ = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-
-#generate call
-for _ in range(num_iterations):
-    _ = model.generate(
+with nvtx.annotate("warmup", color="white"):
+    # run a warm up generate
+    for _ in range(5):
+        _ = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=True,
             top_p=0.4,
-            temperature=0.6
-        )
+            temperature=0.6)
+
+#generate call
+with nvtx.annotate("workload", color="cyan"):
+    for _ in range(num_iterations):
+        _ = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                top_p=0.4,
+                temperature=0.6
+            )
 
 print("inference worked")
