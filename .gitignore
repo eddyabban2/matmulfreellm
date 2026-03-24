@@ -14,3 +14,4 @@ venv/
 *.nsys-rep
 *.qdstrm
 nsys_runs/
+ncu_runs/

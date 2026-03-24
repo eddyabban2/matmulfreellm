@@ -1,4 +1,4 @@
-#!/opt/miniconda3/envs/dejavu/bin/python
+#!/home/eabban/matmulfreellm/venv/bin/python
 
 # on H100 server python is stored at /opt/miniconda3/envs/dejavu/bin/python
 # attention module we are calling is stored in:
@@ -9,6 +9,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from mmfreelm.ops.fusedbitnet import layer_norm_linear_quant_fn
 import argparse
+import nvtx
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -35,7 +36,6 @@ data_type = torch.float16
 
 # Choose device
 device = "cuda" if torch.cuda.is_available() else "cpu"   # must be CUDA for Triton kernels
-device_name = torch.cuda.get_device_name(torch.cuda.current_device())
 # model_name = 'ridger/MMfreeLM-2.7B'
 # model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 # dimensions = int(model.config.hidden_size)
@@ -60,18 +60,19 @@ linear_bias = torch.zeros(O, device=device, dtype=data_type)
 # Forward call
 # is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
 with nvtx.annotate("warmup", color="white"):
-    out = layer_norm_linear_quant_fn(
-        x,
-        norm_weight,
-        norm_bias,
-        linear_weight,
-        linear_bias,
-        residual=None,
-        eps=1e-6,
-        prenorm=False,
-        residual_in_fp32=False,
-        is_rms_norm=True,
-    )
+    for _ in range(5):
+        out = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
 iter = int(args.iterations)
 with nvtx.annotate("workload", color="cyan"):
     for _ in range(iter):
@@ -87,3 +88,5 @@ with nvtx.annotate("workload", color="cyan"):
             residual_in_fp32=False,
             is_rms_norm=True,
         )
+
+print("Done!")

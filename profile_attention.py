@@ -4,6 +4,7 @@
 # -  /home/victoryang00/pytorch/third_party/flash-attention/flash_attn/ops/triton/layer_norm.py
 # - attempting to call class LayerNormLinearFn(torch.autograd.Function):
 #from torch.third_party.flash_attention.flash_attn.ops.triton.layer_norm import LayerNormLinearFn
+import nvtx
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from mmfreelm.ops.fusedbitnet import layer_norm_linear_quant_fn
