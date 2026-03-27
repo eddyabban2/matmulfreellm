@@ -26,28 +26,28 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-s", 
     "--sequence_length",
-    default=32,
+    default=1,
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument( 
     "-m"
     "--max_new_tokens",
-    default=32,
+    default=1,
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument(
     "-i", 
     "--iterations",
-    default=5,
+    default=1,
     help="Determines the number of iterations to benchmark for"
 )
 
 parser.add_argument (
     "-b",
     "--batch_size",
-    default="32",
+    default="1",
     help="Sets the batch size",
 )
 

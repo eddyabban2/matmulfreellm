@@ -8,7 +8,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-p", 
     "--profile",
-    default="detailed",
+    default="full",
     help="sets the sequence length of input tokens"
 )
 
@@ -20,7 +20,8 @@ print(f"Extracted ncu path: {ncu_path}")
 
 command = [
     ncu_path, 
-    "--nvtx", "--nvtx-include", "workload/",
+    "--nvtx", 
+    "--nvtx-include", "workload/",
     "--config-file", "off",
     "--export", "/home/eabban/matmulfreellm/ncu_runs/batch10Iter10",
     "--force-overwrite",
@@ -31,6 +32,5 @@ command = [
     "-i", "1"
 ]
 
-print(command)
 print(f"running command {' '.join(command)}")
-# subprocess.run(command, check=True)
+subprocess.run(command, check=True)

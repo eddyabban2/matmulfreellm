@@ -1,4 +1,4 @@
-#!/opt/miniconda3/envs/dejavu/bin/python
+#!/home/eabban/matmulfreellm/venv/bin/python
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
@@ -33,6 +33,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "-n",
     "--max_new_tokens",
     default=1,
     help="sets the number of new tokens to be generated"

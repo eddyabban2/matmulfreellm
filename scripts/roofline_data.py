@@ -1,0 +1,161 @@
+import subprocess
+import argparse
+import sys
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import time
+import torch
+from torch.profiler import profile, record_function, ProfilerActivity, schedule
+from torch.utils.flop_counter import FlopCounterMode
+from transformers import AutoModelForCausalLM, AutoTokenizer, logging
+import transformers
+sys.path.append('..')
+import mmfreelm
+from bench_utils import generate_random_input_ids
+
+parser = argparse.ArgumentParser(
+    description="Collects data for use in a roofline graph"
+)
+
+parser.add_argument(
+    "-b",
+    "--batch_size",
+    default="1",
+    help="sets the batch size"
+)
+
+parser.add_argument(
+    "-s",
+    "--sequence_length",
+    default="1",
+    help="sets the sequence length of input tokens"
+)
+
+parser.add_argument(
+    "--max_new_tokens",
+    default="1",
+    help="sets the number of new tokens to be generated"
+)
+
+args = parser.parse_args()
+
+
+def get_dram_kbytes_used(bs, new_tokens, seq_len):
+    ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
+    print(f"Extracted ncu path: {ncu_path}")
+
+    report_name = "/home/eabban/matmulfreellm/ncu_runs/roofline_data"
+    benchmark_command = [
+        ncu_path, 
+        "--nvtx", "--nvtx-include", "workload/",
+        "--config-file", "off",
+        "--export", report_name,
+        "--force-overwrite",
+        # "--target-processes", "all",
+        "--target-processes", "application-only",
+        "--metrics", ",".join([
+            # Memory metrics
+            "dram__bytes.sum"
+            # collecting this data with nsight compute is too intensive 
+            # #F64 opeartions
+            # "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
+            # "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
+            # "sm__sass_thread_inst_executed_op_dmul_pred_on.sum",
+            # # FP32 operations
+            # "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
+            # "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
+            # "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",  # counts as 2 FLOPS
+            # # FP16 operations
+            # "sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
+            # "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
+            # "sm__sass_thread_inst_executed_op_hfma_pred_on.sum",  # counts as 2 FLOPS
+            # # Tensor Core operations (if using matmul/transformer ops)
+            # "sm__ops_path_tensor_op_hmma_pred_on.sum",           # FP16 tensor core
+            # "sm__ops_path_tensor_op_imma_pred_on.sum",           # INT8 tensor core
+        ]),
+        "/home/eabban/matmulfreellm/quiet_run.py",
+        "-b", str(bs),
+        "-s", str(seq_len),
+        "-n", str(new_tokens),
+        "-i", "1"
+    ]
+    print(f"running command {' '.join(benchmark_command)}")
+    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    # subprocess.run(benchmark_command, check=True)
+    print("command finished now extracting data")
+
+    extract_data_command = [
+        ncu_path, 
+        "--import", report_name + ".ncu-rep",  
+        "--page", "raw",
+        "--metrics", "dram__bytes.sum"
+    ]
+
+    print(f"running command {' '.join(extract_data_command)}")
+    data = subprocess.check_output(extract_data_command).decode('ascii')
+    print("data extracted now parsing data")
+    data = data.splitlines()
+    kernel_count = 0 
+    total = 0
+    for line in data: 
+        if "dram__bytes.sum" in line:
+            kernel_count += 1
+            words = line.split()
+            value = float(words[2])
+            if('Mbyte' in line):
+                value *= 1000
+            if("Kbyte" not in line and 'Mbyte' not in line):
+                print(f"warning non standard value found in line{line}")
+                exit()
+            total += value
+    print(f"Kernal Count: {kernel_count}")
+    print(f"Total {total:,.2f} Kbytes accessed")
+    return total
+def get_flops(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    # create random input tokens
+    batch = generate_random_input_ids(model_name, bs, seq_len)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+    # run a warm up generate 
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=5,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+    
+    # profile generate 
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        with_flops=True
+    ) as prof:
+        _ = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=new_tokens,
+                do_sample=True,
+                top_p=0.4,
+                temperature=0.6
+            )
+    events = prof.key_averages()
+    # print(prof.key_averages().table(sort_by="cuda_time_total"))
+    float_ops = sum(e.flops for e in events)
+    return float_ops
+
+def main():
+    print("Extracting Roofline Data")
+    gigaBytes = get_dram_kbytes_used(1, 1, 1) / 1e6
+    gigaFlops = get_flops(1, 1, 1)/ 1e9
+    print(f"{gigaBytes:,.2f} Giga Bytes Accessed")
+    print(f"{gigaFlops:,.2f} GFLOPS")
+    compute_intensity = gigaFlops/ gigaBytes
+    print(f"Compute intensity: {compute_intensity}")
+
+    # 61.90 Giga Bytes Accessed
+    # 7.86 GFLOPS
+
+if __name__ == "__main__":
+    main()
