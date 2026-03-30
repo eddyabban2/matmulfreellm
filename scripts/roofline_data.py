@@ -9,19 +9,13 @@ from torch.profiler import profile, record_function, ProfilerActivity, schedule
 from torch.utils.flop_counter import FlopCounterMode
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
+import csv
 sys.path.append('..')
 import mmfreelm
 from bench_utils import generate_random_input_ids
 
 parser = argparse.ArgumentParser(
     description="Collects data for use in a roofline graph"
-)
-
-parser.add_argument(
-    "-b",
-    "--batch_size",
-    default="1",
-    help="sets the batch size"
 )
 
 parser.add_argument(
@@ -145,17 +139,40 @@ def get_flops(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     float_ops = sum(e.flops for e in events)
     return float_ops
 
+def get_data(bs, new_tokens, seq_len):
+    row = {}
+    row['Model Name'] = 'ridger/MMfreeLM-2.7B'
+    row['Batch Size'] = bs
+    row['Tokens Generated'] = new_tokens 
+    row['Input Sequence Length'] = seq_len
+    row['GigaBytes Accessed'] = get_dram_kbytes_used(bs, new_tokens, seq_len) / 1e6
+    time.sleep(120)
+    row['GFLOPs'] = gigaFlops = get_flops(bs, new_tokens, seq_len)/ 1e9
+    row['Compute Intensity'] = row['GFLOPs'] / row['GigaBytes Accessed']
+    return row
+
 def main():
     print("Extracting Roofline Data")
-    gigaBytes = get_dram_kbytes_used(1, 1, 1) / 1e6
-    gigaFlops = get_flops(1, 1, 1)/ 1e9
-    print(f"{gigaBytes:,.2f} Giga Bytes Accessed")
-    print(f"{gigaFlops:,.2f} GFLOPS")
-    compute_intensity = gigaFlops/ gigaBytes
-    print(f"Compute intensity: {compute_intensity}")
+    from datetime import datetime
+    filename =  'roofline_data.csv'.format(date=datetime.now())
+    sequence_length = int(args.sequence_length)
+    max_new_tokens = int(args.max_new_tokens)
+    min_batch_power = 0
+    max_batch_power = 1
+    first_row = True
+    with open(filename, 'w') as csvfile:
+        for batch_power in range(min_batch_power, max_batch_power+1):
+            batch_size = 2**batch_power
+            print(batch_size)
+            row = get_data(batch_size, max_new_tokens, sequence_length)
+            if(first_row):
+                csvwriter = csv.DictWriter(csvfile, row.keys())
+                csvwriter.writeheader()
+                first_row = False
+            csvwriter.writerow(row) 
 
-    # 61.90 Giga Bytes Accessed
-    # 7.86 GFLOPS
+
+    
 
 if __name__ == "__main__":
     main()
