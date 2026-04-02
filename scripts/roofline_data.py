@@ -1,3 +1,7 @@
+# Used To Collect Roofline Data
+# example run: 
+#   python roofline_data.py -s 161 --max_new_tokens 338	
+
 import subprocess
 import argparse
 import sys
@@ -38,7 +42,7 @@ def get_dram_kbytes_used(bs, new_tokens, seq_len):
     ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
     print(f"Extracted ncu path: {ncu_path}")
 
-    report_name = "/home/eabban/matmulfreellm/ncu_runs/roofline_data"
+    report_name = "/home/eabban/eddy_matmulfreellm/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
     benchmark_command = [
         ncu_path, 
         "--nvtx", "--nvtx-include", "workload/",
@@ -67,7 +71,7 @@ def get_dram_kbytes_used(bs, new_tokens, seq_len):
             # "sm__ops_path_tensor_op_hmma_pred_on.sum",           # FP16 tensor core
             # "sm__ops_path_tensor_op_imma_pred_on.sum",           # INT8 tensor core
         ]),
-        "/home/eabban/matmulfreellm/quiet_run.py",
+        "/home/eabban/eddy_matmulfreellm/quiet_run.py",
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),
@@ -98,7 +102,9 @@ def get_dram_kbytes_used(bs, new_tokens, seq_len):
             value = float(words[2])
             if('Mbyte' in line):
                 value *= 1000
-            if("Kbyte" not in line and 'Mbyte' not in line):
+            if('Gbyte' in line):
+                value *= 1e6
+            if("Kbyte" not in line and 'Mbyte' not in line and 'Gbyte' not in line):
                 print(f"warning non standard value found in line{line}")
                 exit()
             total += value
@@ -146,9 +152,10 @@ def get_data(bs, new_tokens, seq_len):
     row['Tokens Generated'] = new_tokens 
     row['Input Sequence Length'] = seq_len
     row['GigaBytes Accessed'] = get_dram_kbytes_used(bs, new_tokens, seq_len) / 1e6
-    time.sleep(120)
+    # time.sleep(120)
     row['GFLOPs'] = gigaFlops = get_flops(bs, new_tokens, seq_len)/ 1e9
     row['Compute Intensity'] = row['GFLOPs'] / row['GigaBytes Accessed']
+    print(row)
     return row
 
 def main():
@@ -157,8 +164,8 @@ def main():
     filename =  'roofline_data.csv'.format(date=datetime.now())
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
-    min_batch_power = 0
-    max_batch_power = 1
+    min_batch_power = 7
+    max_batch_power = 10
     first_row = True
     with open(filename, 'w') as csvfile:
         for batch_power in range(min_batch_power, max_batch_power+1):
