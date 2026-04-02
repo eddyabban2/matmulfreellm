@@ -14,6 +14,7 @@ from torch.utils.flop_counter import FlopCounterMode
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import csv
+from pathlib import Path
 sys.path.append('..')
 import mmfreelm
 from bench_utils import generate_random_input_ids
@@ -35,43 +36,57 @@ parser.add_argument(
     help="sets the number of new tokens to be generated"
 )
 
+parser.add_argument(
+    "--min_batch_power",
+    default="0",
+    help="sets the minimum batch power"
+)
+
+parser.add_argument(
+    "--max_batch_power",
+    default="0",
+    help="sets the minimum batch power"
+)
+
+
 args = parser.parse_args()
 
+double_precision_metrics = [ "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
+        "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
+        "sm__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
+single_precision_metrics = ["sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
+        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
+        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]
+half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
+        "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
+        "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
+tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
+        "sm__ops_path_tensor_op_imma_pred_on.sum"]
 
-def get_dram_kbytes_used(bs, new_tokens, seq_len):
+
+def get_ncu_data(bs, new_tokens, seq_len):
     ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
     print(f"Extracted ncu path: {ncu_path}")
-
-    report_name = "/home/eabban/eddy_matmulfreellm/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    os.chdir('../')
+    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    test_report = os.getcwd() + "/ncu_runs/batch10Iter10"
+    # report_name = test_report
     benchmark_command = [
         ncu_path, 
         "--nvtx", "--nvtx-include", "workload/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
+        "--replay-mode", "application",
+        "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
-        "--metrics", ",".join([
-            # Memory metrics
-            "dram__bytes.sum"
-            # collecting this data with nsight compute is too intensive 
-            # #F64 opeartions
-            # "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
-            # "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
-            # "sm__sass_thread_inst_executed_op_dmul_pred_on.sum",
-            # # FP32 operations
-            # "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
-            # "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
-            # "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",  # counts as 2 FLOPS
-            # # FP16 operations
-            # "sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
-            # "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
-            # "sm__sass_thread_inst_executed_op_hfma_pred_on.sum",  # counts as 2 FLOPS
-            # # Tensor Core operations (if using matmul/transformer ops)
-            # "sm__ops_path_tensor_op_hmma_pred_on.sum",           # FP16 tensor core
-            # "sm__ops_path_tensor_op_imma_pred_on.sum",           # INT8 tensor core
-        ]),
-        "/home/eabban/eddy_matmulfreellm/quiet_run.py",
+        "--metrics", ",".join(["dram__bytes.sum"] + 
+            # double_precision_metrics + 
+            single_precision_metrics + 
+            half_precision_metrics),
+            # + tensor_core_metrics),
+        "python", "quiet_run.py",
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),
@@ -86,18 +101,39 @@ def get_dram_kbytes_used(bs, new_tokens, seq_len):
         ncu_path, 
         "--import", report_name + ".ncu-rep",  
         "--page", "raw",
-        "--metrics", "dram__bytes.sum"
+        "--metrics", ",".join(["dram__bytes.sum"] + 
+            double_precision_metrics + 
+            single_precision_metrics + 
+            half_precision_metrics + 
+            tensor_core_metrics)
     ]
 
     print(f"running command {' '.join(extract_data_command)}")
     data = subprocess.check_output(extract_data_command).decode('ascii')
     print("data extracted now parsing data")
     data = data.splitlines()
-    kernel_count = 0 
-    total = 0
+    results = {}
+    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_data_from_results(data)
+    results["KiloBytes Accessed"] = total_kilo_bytes
+    results["Double Precision FLOPs"] = double_precision_count
+    results["Single Precision FLOPs"] = single_precision_count
+    results["Half Precision FLOPs"] = half_precision_count
+    results["Tensor FLOPs"] = tensor_count
+    results["(NCU) Total FLOPs"] = double_precision_count + single_precision_count + half_precision_count + tensor_count
+    print(results)
+    return results
+
+
+def extract_data_from_results(data):
+    dram_kernel_count = 0 
+    total_kilo_bytes = 0
+    double_precision_count = 0 
+    single_precision_count = 0 
+    half_precision_count = 0 
+    tensor_count = 0
+    flop_metrics = double_precision_metrics + single_precision_metrics + half_precision_metrics + tensor_core_metrics
     for line in data: 
         if "dram__bytes.sum" in line:
-            kernel_count += 1
             words = line.split()
             value = float(words[2])
             if('Mbyte' in line):
@@ -107,10 +143,22 @@ def get_dram_kbytes_used(bs, new_tokens, seq_len):
             if("Kbyte" not in line and 'Mbyte' not in line and 'Gbyte' not in line):
                 print(f"warning non standard value found in line{line}")
                 exit()
-            total += value
-    print(f"Kernal Count: {kernel_count}")
-    print(f"Total {total:,.2f} Kbytes accessed")
-    return total
+            total_kilo_bytes += value
+
+        if any(metric in line for metric in flop_metrics):
+            words = line.split()
+            value = int(words[2].replace("," , ""))
+            if any(metric in line for metric in double_precision_metrics):
+                double_precision_count += value
+            elif any(metric in line for metric in single_precision_metrics):
+                single_precision_count += value
+            elif any(metric in line for metric in half_precision_metrics):
+                half_precision_count += value
+            elif any(metric in line for metric in tensor_core_metrics):
+                tensor_count += value
+    
+    return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count
+
 def get_flops(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, bs, seq_len)
@@ -151,22 +199,32 @@ def get_data(bs, new_tokens, seq_len):
     row['Batch Size'] = bs
     row['Tokens Generated'] = new_tokens 
     row['Input Sequence Length'] = seq_len
-    row['GigaBytes Accessed'] = get_dram_kbytes_used(bs, new_tokens, seq_len) / 1e6
+    data = get_ncu_data(bs, new_tokens, seq_len)
+    row["GigaBytes Accessed"] = data["KiloBytes Accessed"] / 1e6
+    row["Double Precision FLOPs"] = data["Double Precision FLOPs"]
+    row["Single Precision FLOPs"] = data["Single Precision FLOPs"]
+    row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
+    row["Tensor FLOPs"] = data["Tensor FLOPs"] 
+    row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
+    # row['GigaBytes Accessed'] = get_ncu_data(bs, new_tokens, seq_len) / 1e6
     # time.sleep(120)
-    row['GFLOPs'] = gigaFlops = get_flops(bs, new_tokens, seq_len)/ 1e9
-    row['Compute Intensity'] = row['GFLOPs'] / row['GigaBytes Accessed']
+    row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
+    row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
+    row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
     print(row)
     return row
 
 def main():
     print("Extracting Roofline Data")
     from datetime import datetime
-    filename =  'roofline_data.csv'.format(date=datetime.now())
+    filename =  'roofline_data.csv'
+    print(f"start time: {datetime.now()}")
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
-    min_batch_power = 7
-    max_batch_power = 10
+    min_batch_power = int(args.min_batch_power)
+    max_batch_power = int(args.max_batch_power)
     first_row = True
+    start = time.perf_counter()
     with open(filename, 'w') as csvfile:
         for batch_power in range(min_batch_power, max_batch_power+1):
             batch_size = 2**batch_power
@@ -177,6 +235,8 @@ def main():
                 csvwriter.writeheader()
                 first_row = False
             csvwriter.writerow(row) 
+    end = time.perf_counter()
+    print(f"Time for profiling: {end - start} seconds")
 
 
     
