@@ -49,8 +49,8 @@ gpu_roofs = [
 #   {"name" : "Scalar Add Peak",    "val" : 98.48},
 #   {"name" : "DP Vector Add Peak", "val" : 843.06},
 #   {"name" : "DP Vector FMA Peak", "val" : 1691.96},
-  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparcity)", "val" : 1979000},
-  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores no sparcity)", "val" : 1000000}
+  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
+  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores no sparsity)", "val" : 1000000}
 ]
 
 # Memory in Giga Bytes Per Second

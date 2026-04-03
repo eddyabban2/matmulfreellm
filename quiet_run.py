@@ -1,4 +1,3 @@
-#!/home/eabban/matmulfreellm/venv/bin/python
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
