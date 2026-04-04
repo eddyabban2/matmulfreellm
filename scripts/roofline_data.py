@@ -71,6 +71,11 @@ def get_ncu_data(bs, new_tokens, seq_len):
     report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
     test_report = os.getcwd() + "/ncu_runs/batch10Iter10"
     # report_name = test_report
+    metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
+            # double_precision_metrics + 
+            single_precision_metrics + 
+            half_precision_metrics)
+            # + tensor_core_metrics)
     benchmark_command = [
         ncu_path, 
         "--nvtx", "--nvtx-include", "workload/",
@@ -81,11 +86,7 @@ def get_ncu_data(bs, new_tokens, seq_len):
         "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
-        "--metrics", ",".join(["dram__bytes.sum"] + 
-            # double_precision_metrics + 
-            single_precision_metrics + 
-            half_precision_metrics),
-            # + tensor_core_metrics),
+        "--metrics", metrics_string,
         "python", "quiet_run.py",
         "-b", str(bs),
         "-s", str(seq_len),
@@ -101,11 +102,7 @@ def get_ncu_data(bs, new_tokens, seq_len):
         ncu_path, 
         "--import", report_name + ".ncu-rep",  
         "--page", "raw",
-        "--metrics", ",".join(["dram__bytes.sum"] + 
-            double_precision_metrics + 
-            single_precision_metrics + 
-            half_precision_metrics + 
-            tensor_core_metrics)
+        "--metrics", metrics_string
     ]
 
     print(f"running command {' '.join(extract_data_command)}")
@@ -113,12 +110,13 @@ def get_ncu_data(bs, new_tokens, seq_len):
     print("data extracted now parsing data")
     data = data.splitlines()
     results = {}
-    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_data_from_results(data)
+    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us = extract_data_from_results(data)
     results["KiloBytes Accessed"] = total_kilo_bytes
     results["Double Precision FLOPs"] = double_precision_count
     results["Single Precision FLOPs"] = single_precision_count
     results["Half Precision FLOPs"] = half_precision_count
     results["Tensor FLOPs"] = tensor_count
+    results["Run Time (s)"] = run_time_us / 1e6
     results["(NCU) Total FLOPs"] = double_precision_count + single_precision_count + half_precision_count + tensor_count
     print(results)
     return results
@@ -131,6 +129,7 @@ def extract_data_from_results(data):
     single_precision_count = 0 
     half_precision_count = 0 
     tensor_count = 0
+    run_time_us = 0
     flop_metrics = double_precision_metrics + single_precision_metrics + half_precision_metrics + tensor_core_metrics
     for line in data: 
         if "dram__bytes.sum" in line:
@@ -144,8 +143,7 @@ def extract_data_from_results(data):
                 print(f"warning non standard value found in line{line}")
                 exit()
             total_kilo_bytes += value
-
-        if any(metric in line for metric in flop_metrics):
+        elif any(metric in line for metric in flop_metrics):
             words = line.split()
             value = int(words[2].replace("," , ""))
             if any(metric in line for metric in double_precision_metrics):
@@ -156,8 +154,16 @@ def extract_data_from_results(data):
                 half_precision_count += value
             elif any(metric in line for metric in tensor_core_metrics):
                 tensor_count += value
-    
-    return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count
+        elif "gpu__time_duration.sum" in line:
+            print(line)
+            value = float(words[2])
+            if('ms' == words[1]):
+                value *= 1e3
+            if("us" not in line and 'ms' not in line):
+                print(f"warning non standard value time value in line: {line}")
+                exit()
+            run_time_us += value
+    return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us
 
 def get_flops(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
@@ -206,11 +212,13 @@ def get_data(bs, new_tokens, seq_len):
     row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
     row["Tensor FLOPs"] = data["Tensor FLOPs"] 
     row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
+    row["Run Time (s)"] = data["Run Time (s)"]
     # row['GigaBytes Accessed'] = get_ncu_data(bs, new_tokens, seq_len) / 1e6
     # time.sleep(120)
-    row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
+    # row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
     row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
-    row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
+    row["GFLOP/s"] = row["(NCU) Total GFLOPs"] / row["Run Time (s)"]
+    # row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
     print(row)
     return row
 
