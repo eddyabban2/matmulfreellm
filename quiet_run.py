@@ -5,7 +5,7 @@ import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
@@ -78,14 +78,13 @@ model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
-    for _ in range(5):
-        _ = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            top_p=0.4,
-            temperature=0.6)
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
 
 #generate call
 with nvtx.annotate("workload", color="cyan"):

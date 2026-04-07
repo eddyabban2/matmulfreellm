@@ -49,8 +49,9 @@ gpu_roofs = [
 #   {"name" : "Scalar Add Peak",    "val" : 98.48},
 #   {"name" : "DP Vector Add Peak", "val" : 843.06},
 #   {"name" : "DP Vector FMA Peak", "val" : 1691.96},
-  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
-  {"name" : "Peak 16-Bit Floating Point Performance with Tensor Cores no sparsity)", "val" : 1000000}
+  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
+  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" : 1000000},
+  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
 ]
 
 # Memory in Giga Bytes Per Second
@@ -58,7 +59,7 @@ mem_bottlenecks = [
     # {"name" : "L1 Bandwidth",     "val" : 7398.95},
     # {"name" : "L2 Bandwidth",     "val" : 1237.34},
     # {"name" : "MCDRAM Bandwidth", "val" : 393.75},
-    {"name" : "Nvidia 6000",    "val" : 1597},
+    {"name" : "Nvidia 6000",    "val" : 1790},
     {"name" : "HBM2e (H100)",    "val" : 3350}
 ]
 
@@ -81,18 +82,18 @@ AI_v = {
 
 # Datapoints
 datapoints = [
-  {"AI" : "Batche Size 1, Sequence Length 1, New Tokens 1",     "GFLOPs" : 61.89,  "label"  : "Batche Size 1, Sequence Length 1, New Tokens 1"},
-  {"AI" : "Batche Size 1, Sequence Length 161, New Tokens 10",     "GFLOPs" : 916.83138757,  "label"  :   "Batche Size 1, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 2, Sequence Length 161, New Tokens 10",     "GFLOPs" : 1807.46644679,  "label"  :  "Batche Size 2, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 4, Sequence Length 161, New Tokens 10",     "GFLOPs" : 3588.73656523,  "label"  :  "Batche Size 4, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 8, Sequence Length 161, New Tokens 10",     "GFLOPs" : 7151.27680211,  "label"  :  "Batche Size 8, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 16, Sequence Length 161, New Tokens 10",    "GFLOPs" : 14276.35727587,  "label"  : "Batche Size 16, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 32, Sequence Length 161, New Tokens 10",    "GFLOPs" : 28526.51822339,  "label"  : "Batche Size 32, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 64, Sequence Length 161, New Tokens 10",    "GFLOPs" : 57026.84011843,  "label"  : "Batche Size 64, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 128, Sequence Length 161, New Tokens 10",   "GFLOPs" : 114027.48390851,  "label"  : "Batche Size 128, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 256, Sequence Length 161, New Tokens 10",   "GFLOPs" : 228028.77148867,  "label"  : "Batche Size 256, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 512, Sequence Length 161, New Tokens 10",   "GFLOPs" : 456031.34664899,  "label"  : "Batche Size 512, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 1024, Sequence Length 161, New Tokens 10",  "GFLOPs" : 912036.49696963,  "label"  : "Batche Size 1024, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 1, Sequence Length 1, New Tokens 1",        "GFLOP/s" : 61.89,  "label"  : "Batche Size 1, Sequence Length 1, New Tokens 1"},
+  {"AI" : "Batche Size 1, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 916.83138757,  "label"  :   "Batche Size 1, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 2, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 1807.46644679,  "label"  :  "Batche Size 2, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 4, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 3588.73656523,  "label"  :  "Batche Size 4, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 8, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 7151.27680211,  "label"  :  "Batche Size 8, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 16, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 14276.35727587,  "label"  : "Batche Size 16, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 32, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 28526.51822339,  "label"  : "Batche Size 32, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 64, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 57026.84011843,  "label"  : "Batche Size 64, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 128, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 114027.48390851,  "label"  : "Batche Size 128, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 256, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 228028.77148867,  "label"  : "Batche Size 256, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 512, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 456031.34664899,  "label"  : "Batche Size 512, Sequence Length 161, New Tokens 10"},
+  {"AI" : "Batche Size 1024, Sequence Length 161, New Tokens 10",  "GFLOP/s" : 912036.49696963,  "label"  : "Batche Size 1024, Sequence Length 161, New Tokens 10"},
 
   #{"AI" : 10,                        "GFLOPs" : 1000.00,  "label"  : "I'm pretty cool",  "prop" : ["whatever", "..."]},
   #{"AI" : "MyCPUIntensiveBenchmark", "GFLOPs" : 3000.00, "label"  : "I'm unbelievable", "prop" : ["whatever", "..."]},
@@ -186,7 +187,7 @@ for roof in gpu_roofs:
   ax.text(
     #roof["val"]/max_slope*10,roof["val"]*1.1,
     xmax/(10**(xlogsize*0.01)), roof["val"]*(10**(ylogsize*0.01)),
-    roof["name"] + ": " + str(roof["val"]) + " GFLOPs",
+    roof["name"] + ": " + str(roof["val"]) + " GFLOP/s",
     ha="right",
     fontsize=11,
     color="grey")
@@ -214,7 +215,7 @@ for point in datapoints:
   if isinstance(AI,str):
     AI = AI_v[AI]
 
-  ax.scatter(AI, point["GFLOPs"], label=point["label"], zorder=100)
+  ax.scatter(AI, point["GFLOP/s"], label=point["label"], zorder=100)
 
 # Logarithmic axis labels format
 ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y,pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(y),0)))).format(y)))

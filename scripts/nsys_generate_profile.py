@@ -36,10 +36,10 @@ command = [
    "-p", "workload", 
    # "--nvtx-domain-include", "workload,warmup", 
    "python", "/home/eabban/matmulfreellm/quiet_run.py", 
-    "-b", "5",
+    "-b", "1",
     "-i", "1", 
-    "-s", "32 ", 
-    "--max_new_tokens", "31"
+    "-s", "4 ", 
+    "--max_new_tokens", "17"
 ]
 
 print(f"running command {' '.join(command)}")

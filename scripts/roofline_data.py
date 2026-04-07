@@ -14,10 +14,17 @@ from torch.utils.flop_counter import FlopCounterMode
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import csv
+import pandas as pd
 from pathlib import Path
 sys.path.append('..')
 import mmfreelm
-from bench_utils import generate_random_input_ids
+import logging
+from utils import CustomThread
+
+logger = logging.getLogger(__name__)
+FORMAT = "[%(asctime)s %(levelname)s %(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
+logging.basicConfig(format=FORMAT, filename='roofline.log', filemode='w')
+logger.setLevel(logging.DEBUG)
 
 parser = argparse.ArgumentParser(
     description="Collects data for use in a roofline graph"
@@ -47,6 +54,12 @@ parser.add_argument(
     default="0",
     help="sets the minimum batch power"
 )
+parser.add_argument(
+    '-t',
+    '--test',
+    default=False,
+    action='store_true'    
+)
 
 
 args = parser.parse_args()
@@ -62,23 +75,27 @@ half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
         "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
 tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
         "sm__ops_path_tensor_op_imma_pred_on.sum"]
+metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
+        # double_precision_metrics + 
+        single_precision_metrics + 
+        half_precision_metrics)
+        # + tensor_core_metrics)
 
 
-def get_ncu_data(bs, new_tokens, seq_len):
-    ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
-    print(f"Extracted ncu path: {ncu_path}")
-    os.chdir('../')
+ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
+logger.debug(f"Extracted ncu path: {ncu_path}")
+os.chdir('../')
+
+
+def run_ncu_profile(bs, new_tokens, seq_len):
     report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
-    test_report = os.getcwd() + "/ncu_runs/batch10Iter10"
-    # report_name = test_report
-    metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
-            # double_precision_metrics + 
-            single_precision_metrics + 
-            half_precision_metrics)
-            # + tensor_core_metrics)
     benchmark_command = [
-        ncu_path, 
-        "--nvtx", "--nvtx-include", "workload/",
+        ncu_path, "--nvtx",
+        # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
+        "--nvtx-include", "workload/",
+        "--nvtx-include", "HGRNBitAttentionForward/",
+        "--nvtx-include", "HGRNBitMLP/",
+        "--nvtx-exclude", "warmup/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
@@ -93,11 +110,15 @@ def get_ncu_data(bs, new_tokens, seq_len):
         "-n", str(new_tokens),
         "-i", "1"
     ]
-    print(f"running command {' '.join(benchmark_command)}")
-    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    logger.debug(f"running command {' '.join(benchmark_command)}")
+    results = ""
+    # results = subprocess.run(benchmark_command, check=True, capture_output=True, text=True)
+    logger.debug(f"benhcmark command results{results}")
     # subprocess.run(benchmark_command, check=True)
-    print("command finished now extracting data")
-
+    
+def extract_data_from_ncu_files(bs, new_tokens, seq_len):
+    logger.info("extracting data")
+    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
     extract_data_command = [
         ncu_path, 
         "--import", report_name + ".ncu-rep",  
@@ -105,12 +126,13 @@ def get_ncu_data(bs, new_tokens, seq_len):
         "--metrics", metrics_string
     ]
 
-    print(f"running command {' '.join(extract_data_command)}")
+    logger.debug(f"running command {' '.join(extract_data_command)}")
     data = subprocess.check_output(extract_data_command).decode('ascii')
-    print("data extracted now parsing data")
+    logger.debug(f"data extracted: {data[:100000]}")
+    logger.debug("data extracted now parsing data")
     data = data.splitlines()
     results = {}
-    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us = extract_data_from_results(data)
+    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us = parse_data_from_ncu_files(data)
     results["KiloBytes Accessed"] = total_kilo_bytes
     results["Double Precision FLOPs"] = double_precision_count
     results["Single Precision FLOPs"] = single_precision_count
@@ -118,11 +140,72 @@ def get_ncu_data(bs, new_tokens, seq_len):
     results["Tensor FLOPs"] = tensor_count
     results["Run Time (s)"] = run_time_us / 1e6
     results["(NCU) Total FLOPs"] = double_precision_count + single_precision_count + half_precision_count + tensor_count
-    print(results)
+    results['Model Name'] = 'ridger/MMfreeLM-2.7B'
+    results['Batch Size'] = bs
+    results['Tokens Generated'] = new_tokens 
+    results['Input Sequence Length'] = seq_len
+    logger.info(f"row generated: {results}")
     return results
 
+def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
+    logger.info("attempting to extract data using a csv")
+    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    csv_name = report_name +".csv"
+    extract_data_command = [
+        ncu_path, 
+        "--import", report_name + ".ncu-rep",  
+        "--csv", 
+        "--metrics", metrics_string
+    ]
+    logger.info(' '.join(extract_data_command))
+    with open(csv_name, "w") as f:
+        subprocess.run(extract_data_command, check=True, stdout=f)
+    df = pd.read_csv(csv_name)
+    df = df.replace(',','', regex=True)
 
-def extract_data_from_results(data):
+    total_kilo_bytes = 0
+    double_precision_count = 0 
+    single_precision_count = 0 
+    half_precision_count = 0 
+    tensor_count = 0
+    run_time_us = 0
+
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Mbyte")]["Metric Value"].astype(float).sum() * 1e3
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
+
+    valid_dram_units = ["Kbyte", "Mbyte", "Gbyte"]
+    invalid_dram_rows = df[(df["Metric Name"] == "dram__bytes.sum") & (~df["Metric Unit"].isin(valid_dram_units))]
+    if len(invalid_dram_rows) != 0:
+        logger.error()
+
+    double_precision_count += df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
+    single_precision_count += df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
+    half_precision_count += df[df["Metric Name"].isin(half_precision_metrics)]["Metric Value"].astype(float).sum()
+    tensor_count += df[df["Metric Name"].isin(tensor_core_metrics)]["Metric Value"].astype(float).sum()
+
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
+
+    results = {}
+    results["Gigabytes Accessed"] = total_kilo_bytes / 1e6
+    results["Double Precision FLOPs"] = double_precision_count
+    results["Single Precision FLOPs"] = single_precision_count
+    results["Half Precision FLOPs"] = half_precision_count
+    results["Tensor FLOPs"] = tensor_count
+    results["Run Time (s)"] = run_time_us / 1e6
+    results["(NCU) Total GFLOPs"] = (double_precision_count + single_precision_count + half_precision_count + tensor_count) / 1e9
+    results['Model Name'] = 'ridger/MMfreeLM-2.7B'
+    results['Batch Size'] = bs
+    results['Tokens Generated'] = new_tokens 
+    results['Input Sequence Length'] = seq_len
+    results["Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["Gigabytes Accessed"]
+    results["GFLOPs/s"] = results["(NCU) Total GFLOPs"] / results["Run Time (s)"]
+    logger.info(f"row generated: {results}")
+    return results
+
+def parse_data_from_ncu_files(data):
     dram_kernel_count = 0 
     total_kilo_bytes = 0
     double_precision_count = 0 
@@ -140,7 +223,7 @@ def extract_data_from_results(data):
             if('Gbyte' in line):
                 value *= 1e6
             if("Kbyte" not in line and 'Mbyte' not in line and 'Gbyte' not in line):
-                print(f"warning non standard value found in line{line}")
+                logger.error(f"warning non standard value found in line{line}")
                 exit()
             total_kilo_bytes += value
         elif any(metric in line for metric in flop_metrics):
@@ -155,96 +238,63 @@ def extract_data_from_results(data):
             elif any(metric in line for metric in tensor_core_metrics):
                 tensor_count += value
         elif "gpu__time_duration.sum" in line:
-            print(line)
             value = float(words[2])
             if('ms' == words[1]):
                 value *= 1e3
             if("us" not in line and 'ms' not in line):
-                print(f"warning non standard value time value in line: {line}")
+                logger.error(f"warning non standard value time value in line: {line}")
                 exit()
             run_time_us += value
     return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us
 
-def get_flops(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
-    # create random input tokens
-    batch = generate_random_input_ids(model_name, bs, seq_len)
-    input_ids = batch["input_ids"].cuda()
-    attention_mask = batch["attention_mask"].cuda()
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-    # run a warm up generate 
-    _ = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_new_tokens=5,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-    
-    # profile generate 
-    with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        with_flops=True
-    ) as prof:
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
-    events = prof.key_averages()
-    # print(prof.key_averages().table(sort_by="cuda_time_total"))
-    float_ops = sum(e.flops for e in events)
-    return float_ops
-
-def get_data(bs, new_tokens, seq_len):
-    row = {}
-    row['Model Name'] = 'ridger/MMfreeLM-2.7B'
-    row['Batch Size'] = bs
-    row['Tokens Generated'] = new_tokens 
-    row['Input Sequence Length'] = seq_len
-    data = get_ncu_data(bs, new_tokens, seq_len)
-    row["GigaBytes Accessed"] = data["KiloBytes Accessed"] / 1e6
-    row["Double Precision FLOPs"] = data["Double Precision FLOPs"]
-    row["Single Precision FLOPs"] = data["Single Precision FLOPs"]
-    row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
-    row["Tensor FLOPs"] = data["Tensor FLOPs"] 
-    row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
-    row["Run Time (s)"] = data["Run Time (s)"]
-    # row['GigaBytes Accessed'] = get_ncu_data(bs, new_tokens, seq_len) / 1e6
-    # time.sleep(120)
-    # row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
-    row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
-    row["GFLOP/s"] = row["(NCU) Total GFLOPs"] / row["Run Time (s)"]
-    # row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
-    print(row)
-    return row
+# def get_data(bs, new_tokens, seq_len):
+#     row = {}
+#     row['Model Name'] = 'ridger/MMfreeLM-2.7B'
+#     row['Batch Size'] = bs
+#     row['Tokens Generated'] = new_tokens 
+#     row['Input Sequence Length'] = seq_len
+#     data = get_ncu_data(bs, new_tokens, seq_len)
+#     row["GigaBytes Accessed"] = data["KiloBytes Accessed"] / 1e6
+#     row["Double Precision FLOPs"] = data["Double Precision FLOPs"]
+#     row["Single Precision FLOPs"] = data["Single Precision FLOPs"]
+#     row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
+#     row["Tensor FLOPs"] = data["Tensor FLOPs"] 
+#     row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
+#     row["Run Time (s)"] = data["Run Time (s)"]
+#     # row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
+#     row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
+#     row["GFLOP/s"] = row["(NCU) Total GFLOPs"] / row["Run Time (s)"]
+#     # row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
+#     print(row)
+#     return row
 
 def main():
-    print("Extracting Roofline Data")
+    logger.info("Extracting Roofline Data")
     from datetime import datetime
     filename =  'roofline_data.csv'
-    print(f"start time: {datetime.now()}")
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     first_row = True
     start = time.perf_counter()
+    threads = []
     with open(filename, 'w') as csvfile:
         for batch_power in range(min_batch_power, max_batch_power+1):
             batch_size = 2**batch_power
-            print(batch_size)
-            row = get_data(batch_size, max_new_tokens, sequence_length)
+            run_ncu_profile(batch_size, max_new_tokens, sequence_length)
+            thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))
+            threads.append(thread)
+            thread.start()
+        for thread in threads:
+            row = thread.join()
             if(first_row):
                 csvwriter = csv.DictWriter(csvfile, row.keys())
                 csvwriter.writeheader()
                 first_row = False
             csvwriter.writerow(row) 
     end = time.perf_counter()
-    print(f"Time for profiling: {end - start} seconds")
+    logger.info(f"Data for Roofline extracted")
 
 
     
