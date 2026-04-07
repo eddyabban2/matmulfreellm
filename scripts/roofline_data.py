@@ -22,7 +22,7 @@ import logging
 from utils import CustomThread
 
 logger = logging.getLogger(__name__)
-FORMAT = "[%(asctime)s %(levelname)s %(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
+FORMAT = "[%(asctime)s] [%(levelname)s] %(filename)s:%(lineno)s - %(funcName)s ] %(message)s"
 logging.basicConfig(format=FORMAT, filename='roofline.log', filemode='w')
 logger.setLevel(logging.DEBUG)
 
@@ -92,10 +92,10 @@ def run_ncu_profile(bs, new_tokens, seq_len):
     benchmark_command = [
         ncu_path, "--nvtx",
         # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
+        # "--nvtx-exclude", "warmup/",
         "--nvtx-include", "workload/",
-        "--nvtx-include", "HGRNBitAttentionForward/",
-        "--nvtx-include", "HGRNBitMLP/",
-        "--nvtx-exclude", "warmup/",
+        # "--nvtx-include", "HGRNBitAttentionForward/",
+        # "--nvtx-include", "HGRNBitMLP/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
@@ -111,9 +111,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-i", "1"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    results = ""
-    # results = subprocess.run(benchmark_command, check=True, capture_output=True, text=True)
-    logger.debug(f"benhcmark command results{results}")
+    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
     # subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
@@ -177,7 +175,9 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     valid_dram_units = ["Kbyte", "Mbyte", "Gbyte"]
     invalid_dram_rows = df[(df["Metric Name"] == "dram__bytes.sum") & (~df["Metric Unit"].isin(valid_dram_units))]
     if len(invalid_dram_rows) != 0:
-        logger.error()
+        logger.error("Invalid Dram rows detected")
+        logger.error(invalid_dram_rows.head())
+        exit()
 
     double_precision_count += df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
     single_precision_count += df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
@@ -187,6 +187,13 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
     run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
     run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
+
+    valid_time_units = ["ms", "us"]
+    invalid_time_rows = df[(df["Metric Name"] == "gpu__time_duration.sum") & (~df["Metric Unit"].isin(valid_time_units))]
+    if len(invalid_time_rows) != 0:
+        logger.error("Invalid time rows detected")
+        logger.error(invalid_time_rows.head())
+        exit()
 
     results = {}
     results["Gigabytes Accessed"] = total_kilo_bytes / 1e6
@@ -295,9 +302,6 @@ def main():
             csvwriter.writerow(row) 
     end = time.perf_counter()
     logger.info(f"Data for Roofline extracted")
-
-
     
-
 if __name__ == "__main__":
     main()
