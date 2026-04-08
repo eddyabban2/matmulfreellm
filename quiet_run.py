@@ -85,7 +85,7 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
-
+print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
     for _ in range(num_iterations):

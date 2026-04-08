@@ -15,6 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import csv
 import pandas as pd
+
 from pathlib import Path
 sys.path.append('..')
 import mmfreelm
@@ -111,7 +112,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-i", "1"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
     # subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
@@ -145,22 +146,7 @@ def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info(f"row generated: {results}")
     return results
 
-def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
-    logger.info("attempting to extract data using a csv")
-    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
-    csv_name = report_name +".csv"
-    extract_data_command = [
-        ncu_path, 
-        "--import", report_name + ".ncu-rep",  
-        "--csv", 
-        "--metrics", metrics_string
-    ]
-    logger.info(' '.join(extract_data_command))
-    with open(csv_name, "w") as f:
-        subprocess.run(extract_data_command, check=True, stdout=f)
-    df = pd.read_csv(csv_name)
-    df = df.replace(',','', regex=True)
-
+def get_metrics_from_data_frame(df):
     total_kilo_bytes = 0
     double_precision_count = 0 
     single_precision_count = 0 
@@ -203,14 +189,53 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     results["Tensor FLOPs"] = tensor_count
     results["Run Time (s)"] = run_time_us / 1e6
     results["(NCU) Total GFLOPs"] = (double_precision_count + single_precision_count + half_precision_count + tensor_count) / 1e9
-    results['Model Name'] = 'ridger/MMfreeLM-2.7B'
-    results['Batch Size'] = bs
-    results['Tokens Generated'] = new_tokens 
-    results['Input Sequence Length'] = seq_len
-    results["Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["Gigabytes Accessed"]
     results["GFLOPs/s"] = results["(NCU) Total GFLOPs"] / results["Run Time (s)"]
-    logger.info(f"row generated: {results}")
+    results["Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["Gigabytes Accessed"]
     return results
+
+def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
+    logger.info("attempting to extract data using a csv")
+    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    csv_name = report_name +".csv"
+    extract_data_command = [
+        ncu_path, 
+        "--import", report_name + ".ncu-rep",  
+        "--csv", 
+        "--metrics", metrics_string
+    ]
+    logger.info(' '.join(extract_data_command))
+    with open(csv_name, "w") as f:
+        subprocess.run(extract_data_command, check=True, stdout=f)
+    df = pd.read_csv(csv_name)
+    df = df.replace(',','', regex=True)
+
+    full_workload_row = get_metrics_from_data_frame(df)
+    full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+    has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
+    has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
+    first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
+    first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
+
+    first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df)
+    first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+    first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df)
+    first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+    logger.info(f"full workload row generated: {full_workload_row}")
+    return [full_workload_row, first_atte_region_row, first_mlp_region_row]
+
+def get_continous_group_of_kernals(df, condition, index):
+    changes = condition.ne(condition.shift())
+    groups = changes.cumsum()
+    first_true_group = groups[condition].iloc[index]
+    first_region = df[condition & (groups == first_true_group)]
+    return first_region
+    
+def log_full_df(df):
+    with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
+        logger.info(df)
 
 def parse_data_from_ncu_files(data):
     dram_kernel_count = 0 
@@ -294,12 +319,13 @@ def main():
             threads.append(thread)
             thread.start()
         for thread in threads:
-            row = thread.join()
-            if(first_row):
-                csvwriter = csv.DictWriter(csvfile, row.keys())
-                csvwriter.writeheader()
-                first_row = False
-            csvwriter.writerow(row) 
+            rows = thread.join()
+            for row in rows:
+                if(first_row):
+                    csvwriter = csv.DictWriter(csvfile, row.keys())
+                    csvwriter.writeheader()
+                    first_row = False
+                csvwriter.writerow(row) 
     end = time.perf_counter()
     logger.info(f"Data for Roofline extracted")
     
