@@ -42,11 +42,12 @@ def weight_quant(w):
     Returns:
         A quantized weight tensor with shape [d, k].
     """
-    # Compute the scale factor
-    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
-    # Quantize and then de-quantize the tensor
-    u = (w * scale).round().clamp_(-1, 1) / scale
-    return u
+    with nvtx.annotate("weight_quant", color="lightcoral"):
+        # Compute the scale factor
+        scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
+        # Quantize and then de-quantize the tensor
+        u = (w * scale).round().clamp_(-1, 1) / scale
+        return u
 
 
 @triton.autotune(
@@ -62,13 +63,16 @@ def weight_quant(w):
 )
 # @triton.heuristics({"HAS_BIAS": lambda args: args["B"] is not None})
 # @triton.heuristics({"HAS_RESIDUAL": lambda args: args["RESIDUAL"] is not None})
+# M is the number of values in the previous layer?
+# N is the number of values in the current layer?
+# an MxN matrix is used to represent the weighs of previous layer 
 @triton.jit
 def _layer_norm_fwd_quant_kernel(
-    X,  # pointer to the input
+    X,  # pointer to the input # input activation an batch_sizexN array
     Y,  # pointer to the output
     W,  # pointer to the weights
     B,  # pointer to the biases
-    RESIDUAL,  # pointer to the residual
+    RESIDUAL,  # pointer to the residual # an M by N array
     RESIDUAL_OUT,  # pointer to the residual
     Mean,  # pointer to the mean
     Rstd,  # pointer to the 1/std
@@ -76,7 +80,7 @@ def _layer_norm_fwd_quant_kernel(
     stride_y_row,
     stride_res_row,
     stride_res_out_row,
-    N,  # number of columns in X
+    N,  # number of columns in X # might be similar  of similar to batch size
     eps,  # epsilon to avoid division by zero
     IS_RMS_NORM: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -87,23 +91,23 @@ def _layer_norm_fwd_quant_kernel(
 ):
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
-    X += row * stride_x_row
-    Y += row * stride_y_row
+    X += row * stride_x_row # 1 FLOP
+    Y += row * stride_y_row # 1 FLOP
     if HAS_RESIDUAL:
-        RESIDUAL += row * stride_res_row
+        RESIDUAL += row * stride_res_row # residual is MxN tensor (MxN FLOPS)
     if STORE_RESIDUAL_OUT:
-        RESIDUAL_OUT += row * stride_res_out_row
+        RESIDUAL_OUT += row * stride_res_out_row # residual out is also an MxN tensor (MxN FLOPS)
     # Compute mean and variance
-    cols = tl.arange(0, BLOCK_N)
-    x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
+    cols = tl.arange(0, BLOCK_N) # not sure if this uses FLOPs
+    x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32) # zero flops this is a load 
     if HAS_RESIDUAL:
         residual = tl.load(RESIDUAL + cols, mask=cols <
                            N, other=0.0).to(tl.float32)
-        x += residual
+        x += residual # MxN FLOPS
     if STORE_RESIDUAL_OUT:
         tl.store(RESIDUAL_OUT + cols, x, mask=cols < N)
     if not IS_RMS_NORM:
-        mean = tl.sum(x, axis=0) / N
+        mean = tl.sum(x, axis=0) / N # N+1
         tl.store(Mean + row, mean)
         xbar = tl.where(cols < N, x - mean, 0.0)
         var = tl.sum(xbar * xbar, axis=0) / N
@@ -125,10 +129,10 @@ def _layer_norm_fwd_quant_kernel(
         y = y + b
 
     # Aply quantization to the output
-    scale = 127.0 / tl.maximum(tl.max(tl.abs(y), 0), 1e-5)
+    scale = 127.0 / tl.maximum(tl.max(tl.abs(y), 0), 1e-5) # N
     # Quantize and then de-quantize the tensor
-    y = tl.floor(y * scale + 0.5)
-    y = tl.maximum(tl.minimum(y, 127), -128) / scale
+    y = tl.floor(y * scale + 0.5) # 2xN
+    y = tl.maximum(tl.minimum(y, 127), -128) / scale # comparisons not flops 
 
     # Write output
     tl.store(Y + cols, y, mask=mask)
@@ -140,6 +144,7 @@ def _layer_norm_fwd_quant(
     if residual is not None:
         residual_dtype = residual.dtype
     M, N = x.shape
+    print(f"right before triton the shape of x is: {x.shape}")
     assert x.stride(-1) == 1
     if residual is not None:
         assert residual.stride(-1) == 1
@@ -167,7 +172,7 @@ def _layer_norm_fwd_quant(
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
     with torch.cuda.device(x.device.index):
-        _layer_norm_fwd_quant_kernel[(M,)](
+        _layer_norm_fwd_quant_kernel[(M,)]( # this kernel is being launched with M rows 
             x,
             y,
             weight,
@@ -443,6 +448,7 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             x_shape_og = x.shape
             # reshape input data into 2D tensor
             x = x.reshape(-1, x.shape[-1])
+            print(f"Original x shape: {x_shape_og} New X shape: {x.shape}")
             if residual is not None:
                 assert residual.shape == x_shape_og
                 residual = residual.reshape(-1, residual.shape[-1])

@@ -1,6 +1,6 @@
 # Used To Collect Roofline Data
 # example run: 
-#   python roofline_data.py -s 161 --max_new_tokens 338	
+#   python auto_profiler.py -s 161 --max_new_tokens 338	
 
 import subprocess
 import argparse
@@ -77,10 +77,10 @@ half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
 tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
         "sm__ops_path_tensor_op_imma_pred_on.sum"]
 metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
-        # double_precision_metrics + 
+        double_precision_metrics + 
         single_precision_metrics + 
-        half_precision_metrics)
-        # + tensor_core_metrics)
+        half_precision_metrics +
+         tensor_core_metrics)
 
 
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
@@ -146,6 +146,66 @@ def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info(f"row generated: {results}")
     return results
 
+def get_kernels_from_data_frame(df):
+    # Conversion factors to a base unit (bytes, seconds, instructions)
+    unit_conversions = {
+        "Kbyte": 1,
+        "Mbyte": 1e3,
+        "Gbyte": 1e6,
+        "us":   1,
+        "ms":   1e3,
+        "s":    1e6,
+        "ns":   1e-3,
+        "inst": 1,
+    }
+
+    # Canonical names for the base units
+    canonical_unit = {
+        "Kbyte": "Kbyte", "Mbyte": "Kbyte", "Gbyte": "Kbyte",
+        "us": "us", "ms": "us", "ns": "us", "s": "us",
+        "inst": "inst",
+    }
+
+    df["Metric Value"] = df["Metric Value"].astype(float)
+    df["Metric Value"] = df.apply(
+        lambda r: r["Metric Value"] * unit_conversions.get(r["Metric Unit"], 1), axis=1
+    )
+    df["Metric Name"] = df.apply(
+        lambda r: r["Metric Name"] + f' ({canonical_unit.get(r["Metric Unit"], r["Metric Unit"])})',
+        axis=1
+    )
+
+    kernel_id_cols = ["ID", "Kernel Name", "Block Size", "Grid Size", "Device", "thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"]
+
+    df_flat = df.pivot_table(
+        index=kernel_id_cols,
+        columns="Metric Name",
+        values="Metric Value",
+        aggfunc="first"
+    ).reset_index()
+
+    df_flat.columns.name = None
+    df_flat.to_csv("kernels.csv")
+
+def extract_flops(df): 
+    # Multiply Accumulate is two instructions so we cound all of them a second time
+    double_precision_count = (df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
+        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_dfma_pred_on.sum"]["Metric Value"].astype(float).sum())
+    single_precision_count = (df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
+        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]["Metric Value"].astype(float).sum())
+    half_precision_count = (df[df["Metric Name"].isin(half_precision_metrics)]["Metric Value"].astype(float).sum()
+        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]["Metric Value"].astype(float).sum())
+    
+    tensor_count = df[df["Metric Name"].isin(tensor_core_metrics)]["Metric Value"].astype(float).sum()
+
+    return double_precision_count, single_precision_count, half_precision_count, tensor_count
+def extract_dram_usage(df):
+    total_kilo_bytes = 0
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Mbyte")]["Metric Value"].astype(float).sum() * 1e3
+    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
+    return total_kilo_bytes
+
 def get_metrics_from_data_frame(df):
     total_kilo_bytes = 0
     double_precision_count = 0 
@@ -154,9 +214,7 @@ def get_metrics_from_data_frame(df):
     tensor_count = 0
     run_time_us = 0
 
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Mbyte")]["Metric Value"].astype(float).sum() * 1e3
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
+    total_kilo_bytes += extract_dram_usage(df)
 
     valid_dram_units = ["Kbyte", "Mbyte", "Gbyte"]
     invalid_dram_rows = df[(df["Metric Name"] == "dram__bytes.sum") & (~df["Metric Unit"].isin(valid_dram_units))]
@@ -165,10 +223,7 @@ def get_metrics_from_data_frame(df):
         logger.error(invalid_dram_rows.head())
         exit()
 
-    double_precision_count += df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
-    single_precision_count += df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
-    half_precision_count += df[df["Metric Name"].isin(half_precision_metrics)]["Metric Value"].astype(float).sum()
-    tensor_count += df[df["Metric Name"].isin(tensor_core_metrics)]["Metric Value"].astype(float).sum()
+    double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
 
     run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
     run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
@@ -208,6 +263,7 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
         subprocess.run(extract_data_command, check=True, stdout=f)
     df = pd.read_csv(csv_name)
     df = df.replace(',','', regex=True)
+    extract_additional_workload_data(df)
 
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -223,8 +279,65 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df)
     first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
+    first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
+    get_kernels_from_data_frame(first_pair)
+
     logger.info(f"full workload row generated: {full_workload_row}")
     return [full_workload_row, first_atte_region_row, first_mlp_region_row]
+
+def extract_additional_workload_data(df):
+    # fraction of 16, 32, adn 64 bit floating point operations 
+    double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
+    flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
+    dram_kbytes_accessed = extract_dram_usage(df)
+
+    wq_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('weight_quant')]
+    wq_dram_kbytes_accessed = extract_dram_usage(wq_df)
+    wq_double_precision_count, wq_single_precision_count, wq_half_precision_count, wq_tensor_count = extract_flops(wq_df)
+    wq_flop_count = wq_double_precision_count +  wq_single_precision_count +  wq_half_precision_count +  wq_tensor_count
+
+    atten_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')]
+    atten_double_precision_count, atten_single_precision_count, atten_half_precision_count, atten_tensor_count = extract_flops(atten_df)
+    atten_flop_count = atten_double_precision_count +  atten_single_precision_count +  atten_half_precision_count +  atten_tensor_count
+
+    mlp_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')]
+    mlp_double_precision_count, mlp_single_precision_count, mlp_half_precision_count, mlp_tensor_count = extract_flops(mlp_df)
+    mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
+
+
+    with open("additional_workload_info.txt", "w") as f:
+        f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
+        f.write(f"{int(single_precision_count):,d} 32 bit floating point operations\n")
+        f.write(f"{int(half_precision_count):,d} 16 bit floating point operations\n")
+        f.write(f"{int(tensor_count):,d} tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(double_precision_count/flop_count)*100}% of the FLOPs are 64 bit floating point operations\n")
+        f.write(f"{(single_precision_count/flop_count)*100}% of the FLOPs are 32 bit floating point operations\n")
+        f.write(f"{(half_precision_count/flop_count)*100}% of the FLOPs are 16 bit floating point operations\n")
+        f.write(f"{(tensor_count/flop_count)*100}% of the FLOPs are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitAttentionForward\n")
+        f.write(f"{(mlp_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitMLP\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
+        f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
+        f.write(f"{(atten_half_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations\n")
+        f.write(f"{(atten_tensor_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(mlp_double_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 64 bit floating point operations\n")
+        f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
+        f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
+        f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(wq_double_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 64 bit floating point operations\n")
+        f.write(f"{(wq_single_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 32 bit floating point operations\n")
+        f.write(f"{(wq_half_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 16 bit floating point operations\n")
+        f.write(f"{(wq_tensor_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(wq_flop_count/flop_count)*100}% of the FLOPs are from Weight Quantization\n")
+        f.write(f"{(wq_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of dram accesses are from quantization\n")
+
+    # fraction of 
 
 def get_continous_group_of_kernals(df, condition, index):
     changes = condition.ne(condition.shift())

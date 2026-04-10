@@ -38,8 +38,8 @@ command = [
    "python", "/home/eabban/matmulfreellm/quiet_run.py", 
     "-b", "1",
     "-i", "1", 
-    "-s", "4 ", 
-    "--max_new_tokens", "17"
+    "-s", "1", 
+    "--max_new_tokens", "2"
 ]
 
 print(f"running command {' '.join(command)}")
