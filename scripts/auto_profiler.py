@@ -34,13 +34,13 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-s",
     "--sequence_length",
-    default="1",
+    default="161",
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument(
     "--max_new_tokens",
-    default="1",
+    default="5",
     help="sets the number of new tokens to be generated"
 )
 
@@ -86,7 +86,6 @@ metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] +
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
 logger.debug(f"Extracted ncu path: {ncu_path}")
 os.chdir('../')
-
 
 def run_ncu_profile(bs, new_tokens, seq_len):
     report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
@@ -303,6 +302,7 @@ def extract_additional_workload_data(df):
     mlp_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')]
     mlp_double_precision_count, mlp_single_precision_count, mlp_half_precision_count, mlp_tensor_count = extract_flops(mlp_df)
     mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
+    print(f"wq_flop_count: {wq_flop_count}")
 
 
     with open("additional_workload_info.txt", "w") as f:
@@ -425,7 +425,7 @@ def main():
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
-        for batch_power in range(min_batch_power, max_batch_power+1):
+        for batch_power in [10]:
             batch_size = 2**batch_power
             run_ncu_profile(batch_size, max_new_tokens, sequence_length)
             thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))
