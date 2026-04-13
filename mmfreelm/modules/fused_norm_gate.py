@@ -16,6 +16,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 from torch.cuda.amp import custom_bwd, custom_fwd
+import nvtx
 
 
 def layer_norm_ref(x, weight, bias, residual=None, eps=1e-6, prenorm=False, upcast=False):

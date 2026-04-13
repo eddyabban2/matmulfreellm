@@ -1,6 +1,6 @@
 # Used To Collect Roofline Data
 # example run: 
-#   python auto_profiler.py -s 161 --max_new_tokens 338	
+#   python auto_profiler.py -s 161 --max_new_tokens 5	
 
 import subprocess
 import argparse
@@ -111,7 +111,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-i", "1"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
     # subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
@@ -425,7 +425,7 @@ def main():
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
-        for batch_power in [10]:
+        for batch_power in [5]:
             batch_size = 2**batch_power
             run_ncu_profile(batch_size, max_new_tokens, sequence_length)
             thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))
