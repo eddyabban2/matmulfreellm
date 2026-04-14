@@ -1,6 +1,6 @@
 # Used To Collect Roofline Data
 # example run: 
-#   python auto_profiler.py -s 161 --max_new_tokens 5	
+#   python auto_profiler.py -s 161 --max_new_tokens 5 --min_batch_power 5 --max_new_tokens 5 
 
 import subprocess
 import argparse
@@ -34,13 +34,13 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-s",
     "--sequence_length",
-    default="161",
+    default="1",
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument(
     "--max_new_tokens",
-    default="5",
+    default="1",
     help="sets the number of new tokens to be generated"
 )
 
@@ -111,8 +111,9 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-i", "1"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    logger.debug(f"this is changing")
+    # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info("extracting data")
@@ -290,11 +291,6 @@ def extract_additional_workload_data(df):
     flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
     dram_kbytes_accessed = extract_dram_usage(df)
 
-    wq_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('weight_quant')]
-    wq_dram_kbytes_accessed = extract_dram_usage(wq_df)
-    wq_double_precision_count, wq_single_precision_count, wq_half_precision_count, wq_tensor_count = extract_flops(wq_df)
-    wq_flop_count = wq_double_precision_count +  wq_single_precision_count +  wq_half_precision_count +  wq_tensor_count
-
     atten_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')]
     atten_double_precision_count, atten_single_precision_count, atten_half_precision_count, atten_tensor_count = extract_flops(atten_df)
     atten_flop_count = atten_double_precision_count +  atten_single_precision_count +  atten_half_precision_count +  atten_tensor_count
@@ -302,7 +298,6 @@ def extract_additional_workload_data(df):
     mlp_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')]
     mlp_double_precision_count, mlp_single_precision_count, mlp_half_precision_count, mlp_tensor_count = extract_flops(mlp_df)
     mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
-    print(f"wq_flop_count: {wq_flop_count}")
 
 
     with open("additional_workload_info.txt", "w") as f:
@@ -328,14 +323,6 @@ def extract_additional_workload_data(df):
         f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
         f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
         f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
-        f.write(f"==============================================================================================\n")
-        f.write(f"{(wq_double_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 64 bit floating point operations\n")
-        f.write(f"{(wq_single_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 32 bit floating point operations\n")
-        f.write(f"{(wq_half_precision_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are 16 bit floating point operations\n")
-        f.write(f"{(wq_tensor_count/wq_flop_count)*100}% of the FLOPs in Weight Quantization are tensor floating point operations\n")
-        f.write(f"==============================================================================================\n")
-        f.write(f"{(wq_flop_count/flop_count)*100}% of the FLOPs are from Weight Quantization\n")
-        f.write(f"{(wq_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of dram accesses are from quantization\n")
 
     # fraction of 
 
@@ -425,7 +412,7 @@ def main():
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
-        for batch_power in [5]:
+        for batch_power in range(min_batch_power, max_batch_power+1):
             batch_size = 2**batch_power
             run_ncu_profile(batch_size, max_new_tokens, sequence_length)
             thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))

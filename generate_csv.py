@@ -13,7 +13,7 @@ import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
