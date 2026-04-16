@@ -1,6 +1,5 @@
 # Used To Collect Roofline Data
-# example run: 
-#   python auto_profiler.py -s 161 --max_new_tokens 5 --min_batch_power 5 --max_new_tokens 5 
+#   python auto_profiler.py -s 20 --max_new_tokens 10 --min_batch_power 6 --max_batch_power 6 
 
 import subprocess
 import argparse
@@ -263,10 +262,10 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
         subprocess.run(extract_data_command, check=True, stdout=f)
     df = pd.read_csv(csv_name)
     df = df.replace(',','', regex=True)
-    extract_additional_workload_data(df)
 
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    extract_additional_workload_data(df, full_workload_row['Workload'])
 
     has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
     has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
@@ -285,7 +284,7 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     logger.info(f"full workload row generated: {full_workload_row}")
     return [full_workload_row, first_atte_region_row, first_mlp_region_row]
 
-def extract_additional_workload_data(df):
+def extract_additional_workload_data(df, workload_str):
     # fraction of 16, 32, adn 64 bit floating point operations 
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
     flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
@@ -301,6 +300,8 @@ def extract_additional_workload_data(df):
 
 
     with open("additional_workload_info.txt", "w") as f:
+        f.write(f"{workload_str}\n")
+        f.write(f"==============================================================================================\n")
         f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
         f.write(f"{int(single_precision_count):,d} 32 bit floating point operations\n")
         f.write(f"{int(half_precision_count):,d} 16 bit floating point operations\n")

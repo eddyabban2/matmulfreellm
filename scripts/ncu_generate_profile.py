@@ -15,20 +15,20 @@ parser.add_argument(
 parser.add_argument(
     "-b",
     "--batch_size",
-    default="1",
+    default="128",
     help="sets the batch size"
 )
 
 parser.add_argument(
     "-s",
     "--sequence_length",
-    default="1",
+    default="10",
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument(
     "--max_new_tokens",
-    default="1",
+    default="5",
     help="sets the number of new tokens to be generated"
 )
 
@@ -51,13 +51,17 @@ print(f"Extracted ncu path: {ncu_path}")
 
 command = [
     ncu_path, 
-    "--nvtx", "--nvtx-include", "workload/",
+    "--nvtx", 
+    "--nvtx-include", "workload/",
+    "--nvtx-exclude", "warmup/",
     "--config-file", "off",
     "--export", "/home/eabban/matmulfreellm/ncu_runs/generate",
     "--force-overwrite",
+    "--replay-mode", "application",
+    "--app-replay-match", "name",
     "--target-processes", "application-only",
     "--set", metric_profile,
-    "/home/eabban/matmulfreellm/quiet_run.py",
+    "python", "/home/eabban/matmulfreellm/quiet_run.py",
     "-b", batch_size,
     "-s", seq_len,
     "-n", max_new_tokens,

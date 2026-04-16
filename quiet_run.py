@@ -3,7 +3,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 from utils import generate_random_input_ids
 import transformers
@@ -23,6 +22,14 @@ parser.add_argument(
     default=1,
     help="sets the batch size"
 )
+
+parser.add_argument(
+    "--use_original",
+    action='store_true',
+    default=False,
+    help="changes the model to using the original implementation"
+)
+
 
 parser.add_argument(
     "-s",
@@ -52,6 +59,10 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+if(args.use_original):
+    import mmfreelm_original
+else:
+    import mmfreelm
 
 logging.set_verbosity_error()
 logging.disable_default_handler()
