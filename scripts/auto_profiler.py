@@ -14,16 +14,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
 import csv
 import pandas as pd
+import datetime
 
 from pathlib import Path
 sys.path.append('..')
 import mmfreelm
 import logging
 from utils import CustomThread
-
+curr_date=datetime.datetime.today().strftime('%m-%d-%Y')
 logger = logging.getLogger(__name__)
 FORMAT = "[%(asctime)s] [%(levelname)s] %(filename)s:%(lineno)s - %(funcName)s ] %(message)s"
-logging.basicConfig(format=FORMAT, filename='roofline.log', filemode='w')
+logging.basicConfig(format=FORMAT, filename=f'../outputs/logs/{curr_date}.log', filemode='a')
 logger.setLevel(logging.DEBUG)
 
 parser = argparse.ArgumentParser(
@@ -87,7 +88,7 @@ logger.debug(f"Extracted ncu path: {ncu_path}")
 os.chdir('../')
 
 def run_ncu_profile(bs, new_tokens, seq_len):
-    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
     benchmark_command = [
         ncu_path, "--nvtx",
         # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
@@ -145,7 +146,7 @@ def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info(f"row generated: {results}")
     return results
 
-def get_kernels_from_data_frame(df):
+def get_kernels_from_data_frame(df): 
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
         "Kbyte": 1,
@@ -184,7 +185,18 @@ def get_kernels_from_data_frame(df):
     ).reset_index()
 
     df_flat.columns.name = None
-    df_flat.to_csv("kernels.csv")
+    flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+             df_flat["sm__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
+        )
+    df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat.to_csv(f"outputs/csvs/kernels-{curr_date}.csv")
 
 def extract_flops(df): 
     # Multiply Accumulate is two instructions so we cound all of them a second time
@@ -249,7 +261,7 @@ def get_metrics_from_data_frame(df):
 
 def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     logger.info("attempting to extract data using a csv")
-    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
     csv_name = report_name +".csv"
     extract_data_command = [
         ncu_path, 
@@ -269,8 +281,10 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
 
     has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
     has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
+    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')
     first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
     first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
+    linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
 
     first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df)
     first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -278,11 +292,14 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df)
     first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
+    linear_region_row = get_metrics_from_data_frame(linear_kernels_df)
+    linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
     first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
     get_kernels_from_data_frame(first_pair)
 
     logger.info(f"full workload row generated: {full_workload_row}")
-    return [full_workload_row, first_atte_region_row, first_mlp_region_row]
+    return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
 
 def extract_additional_workload_data(df, workload_str):
     # fraction of 16, 32, adn 64 bit floating point operations 
@@ -299,7 +316,7 @@ def extract_additional_workload_data(df, workload_str):
     mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
 
 
-    with open("additional_workload_info.txt", "w") as f:
+    with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "a") as f:
         f.write(f"{workload_str}\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
@@ -404,7 +421,7 @@ def parse_data_from_ncu_files(data):
 def main():
     logger.info("Extracting Roofline Data")
     from datetime import datetime
-    filename =  'roofline_data.csv'
+    filename =  'outputs/csvs/roofline_data.csv'
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
     min_batch_power = int(args.min_batch_power)
