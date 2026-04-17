@@ -7,12 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import triton
 import triton.language as tl
-import nvtx
-import traceback
-import sys
 
-from mmfreelm.modules import RMSNorm
-from mmfreelm.utils import contiguous
+from mmfreelm_original.modules import RMSNorm
+from mmfreelm_original.utils import contiguous
 
 
 def activation_quant(x):
@@ -42,12 +39,11 @@ def weight_quant(w):
     Returns:
         A quantized weight tensor with shape [d, k].
     """
-    with nvtx.annotate("weight_quant", color="lightcoral"):
-        # Compute the scale factor
-        scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
-        # Quantize and then de-quantize the tensor
-        u = (w * scale).round().clamp_(-1, 1) / scale
-        return u
+    # Compute the scale factor
+    scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
+    # Quantize and then de-quantize the tensor
+    u = (w * scale).round().clamp_(-1, 1) / scale
+    return u
 
 
 @triton.autotune(
@@ -63,16 +59,13 @@ def weight_quant(w):
 )
 # @triton.heuristics({"HAS_BIAS": lambda args: args["B"] is not None})
 # @triton.heuristics({"HAS_RESIDUAL": lambda args: args["RESIDUAL"] is not None})
-# M is the number of values in the previous layer?
-# N is the number of values in the current layer?
-# an MxN matrix is used to represent the weighs of previous layer 
 @triton.jit
 def _layer_norm_fwd_quant_kernel(
-    X,  # pointer to the input # input activation an batch_sizexN array
+    X,  # pointer to the input
     Y,  # pointer to the output
     W,  # pointer to the weights
     B,  # pointer to the biases
-    RESIDUAL,  # pointer to the residual # an M by N array
+    RESIDUAL,  # pointer to the residual
     RESIDUAL_OUT,  # pointer to the residual
     Mean,  # pointer to the mean
     Rstd,  # pointer to the 1/std
@@ -80,7 +73,7 @@ def _layer_norm_fwd_quant_kernel(
     stride_y_row,
     stride_res_row,
     stride_res_out_row,
-    N,  # number of columns in X # might be similar  of similar to batch size
+    N,  # number of columns in X
     eps,  # epsilon to avoid division by zero
     IS_RMS_NORM: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -91,23 +84,23 @@ def _layer_norm_fwd_quant_kernel(
 ):
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
-    X += row * stride_x_row # 1 FLOP
-    Y += row * stride_y_row # 1 FLOP
+    X += row * stride_x_row
+    Y += row * stride_y_row
     if HAS_RESIDUAL:
-        RESIDUAL += row * stride_res_row # residual is MxN tensor (MxN FLOPS)
+        RESIDUAL += row * stride_res_row
     if STORE_RESIDUAL_OUT:
-        RESIDUAL_OUT += row * stride_res_out_row # residual out is also an MxN tensor (MxN FLOPS)
+        RESIDUAL_OUT += row * stride_res_out_row
     # Compute mean and variance
-    cols = tl.arange(0, BLOCK_N) # not sure if this uses FLOPs
-    x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32) # zero flops this is a load 
+    cols = tl.arange(0, BLOCK_N)
+    x = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
     if HAS_RESIDUAL:
         residual = tl.load(RESIDUAL + cols, mask=cols <
                            N, other=0.0).to(tl.float32)
-        x += residual # MxN FLOPS
+        x += residual
     if STORE_RESIDUAL_OUT:
         tl.store(RESIDUAL_OUT + cols, x, mask=cols < N)
     if not IS_RMS_NORM:
-        mean = tl.sum(x, axis=0) / N # N+1
+        mean = tl.sum(x, axis=0) / N
         tl.store(Mean + row, mean)
         xbar = tl.where(cols < N, x - mean, 0.0)
         var = tl.sum(xbar * xbar, axis=0) / N
@@ -129,10 +122,11 @@ def _layer_norm_fwd_quant_kernel(
         y = y + b
 
     # Aply quantization to the output
-    scale = 127.0 / tl.maximum(tl.max(tl.abs(y), 0), 1e-5) # N
+    scale = 127.0 / tl.maximum(tl.max(tl.abs(y), 0), 1e-5)
     # Quantize and then de-quantize the tensor
-    y = tl.floor(y * scale + 0.5) # 2xN
-    y = tl.maximum(tl.minimum(y, 127), -128) / scale # comparisons not flops 
+    y_scaled = y * scale
+    y = tl.where(y_scaled >= 0, tl.floor(y_scaled + 0.5), tl.ceil(y_scaled - 0.5))
+    y = tl.maximum(tl.minimum(y, 127), -128) / scale
 
     # Write output
     tl.store(Y + cols, y, mask=mask)
@@ -171,7 +165,7 @@ def _layer_norm_fwd_quant(
         raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
     # heuristics for number of warps
     with torch.cuda.device(x.device.index):
-        _layer_norm_fwd_quant_kernel[(M,)]( # this kernel is being launched with M rows 
+        _layer_norm_fwd_quant_kernel[(M,)](
             x,
             y,
             weight,
@@ -284,7 +278,8 @@ def _layer_norm_bwd_kernel(
             # Aply quantization to the output
             scale = 127.0 / tl.maximum(tl.max(tl.abs(y), 0), 1e-5)
             # Quantize and then de-quantize the tensor
-            y = tl.floor(y * scale + 0.5)
+            y_scaled = y * scale
+            y = tl.where(y_scaled >= 0, tl.floor(y_scaled + 0.5), tl.ceil(y_scaled - 0.5))
             y = tl.maximum(tl.minimum(y, 127), -128) / scale
 
             tl.store(Y + cols, y, mask=mask)
@@ -437,52 +432,42 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
         residual_in_fp32=False,
         is_rms_norm=False,
     ):
-        annotation_name = "LayerNormLinearQuantFn"
-        if(residual != None):
-            annotation_name += " residual"
-        if(is_rms_norm):
-            annotation_name += " is rms norm"
-
-        with nvtx.annotate(annotation_name, color="red"):
-            x_shape_og = x.shape
-            # reshape input data into 2D tensor
-            x = x.reshape(-1, x.shape[-1])
-            if residual is not None:
-                assert residual.shape == x_shape_og
-                residual = residual.reshape(-1, residual.shape[-1])
-            residual_dtype = (
-                residual.dtype
-                if residual is not None
-                else (torch.float32 if residual_in_fp32 else None)
-            )
-            y, mean, rstd, residual_out = _layer_norm_fwd_quant(
-                x,
-                norm_weight,
-                norm_bias,
-                eps,
-                residual,
-                out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
-                residual_dtype=residual_dtype,
-                is_rms_norm=is_rms_norm,
-            )
-            y = y.reshape(x_shape_og)
-            dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
-            # linear_weight = weight_quant(linear_weight).to(dtype)
-            with nvtx.annotate("dataTypeConversion", color="red"):
-                linear_weight = linear_weight.to(dtype)
-            linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
-            with nvtx.annotate("linearFunction", color="yellow"):
-                out = F.linear(y.to(linear_weight.dtype), linear_weight, linear_bias)
-            # We don't store y, will be recomputed in the backward pass to save memory
-            ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
-            ctx.x_shape_og = x_shape_og
-            ctx.eps = eps
-            ctx.is_rms_norm = is_rms_norm
-            ctx.has_residual = residual is not None
-            ctx.prenorm = prenorm
-            ctx.x_dtype = x.dtype
-            ctx.linear_bias_is_none = linear_bias is None
-            return out if not prenorm else (out, residual_out.reshape(x_shape_og))
+        x_shape_og = x.shape
+        # reshape input data into 2D tensor
+        x = x.reshape(-1, x.shape[-1])
+        if residual is not None:
+            assert residual.shape == x_shape_og
+            residual = residual.reshape(-1, residual.shape[-1])
+        residual_dtype = (
+            residual.dtype
+            if residual is not None
+            else (torch.float32 if residual_in_fp32 else None)
+        )
+        y, mean, rstd, residual_out = _layer_norm_fwd_quant(
+            x,
+            norm_weight,
+            norm_bias,
+            eps,
+            residual,
+            out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
+            residual_dtype=residual_dtype,
+            is_rms_norm=is_rms_norm,
+        )
+        y = y.reshape(x_shape_og)
+        dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
+        linear_weight = weight_quant(linear_weight).to(dtype)
+        linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
+        out = F.linear(y.to(linear_weight.dtype), linear_weight, linear_bias)
+        # We don't store y, will be recomputed in the backward pass to save memory
+        ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
+        ctx.x_shape_og = x_shape_og
+        ctx.eps = eps
+        ctx.is_rms_norm = is_rms_norm
+        ctx.has_residual = residual is not None
+        ctx.prenorm = prenorm
+        ctx.x_dtype = x.dtype
+        ctx.linear_bias_is_none = linear_bias is None
+        return out if not prenorm else (out, residual_out.reshape(x_shape_og))
 
     @staticmethod
     @contiguous
@@ -583,20 +568,19 @@ class BitLinear(nn.Linear):
             An output tensor with shape [n, d].
         """
         # Weight tensor
-        with nvtx.annotate("BitLinear Unfused", color="grey"):
-            w = self.weight
+        w = self.weight
 
-            # Apply RMS normalization to the input
-            x_norm = self.norm(x)
+        # Apply RMS normalization to the input
+        x_norm = self.norm(x)
 
-            # Apply quantization to both activations and weights
-            # Uses Straight-Through Estimator (STE) trick with .detach() for gradient flow
-            x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
-            w_quant = w + (weight_quant(w) - w).detach()
-            # Perform linear operation with quantized values
-            y = F.linear(x_quant, w_quant)
+        # Apply quantization to both activations and weights
+        # Uses Straight-Through Estimator (STE) trick with .detach() for gradient flow
+        x_quant = x_norm + (activation_quant(x_norm) - x_norm).detach()
+        w_quant = w + (weight_quant(w) - w).detach()
+        # Perform linear operation with quantized values
+        y = F.linear(x_quant, w_quant)
 
-            return y
+        return y
 
 
 class FusedBitLinear(BitLinear):
@@ -616,20 +600,13 @@ class FusedBitLinear(BitLinear):
         """
         # Initialize the superclass nn.Linear with the given parameters
         super(FusedBitLinear, self).__init__(in_features, out_features, bias=bias)
-        self.cached_weights = None
 
     def forward(self, x):
-        with nvtx.annotate("Fused Bit Linear At Bottom", color="red"):
-            if(self.cached_weights == None):
-                # print("weights are not cached cacheing")
-                self.cached_weights = weight_quant(self.weight)
-            # if self.cached_weights != None and torch.equal(self.weight, self.cached_weights):
-            #     print("error the weights have changed")
-            return layer_norm_linear_quant_fn(
-                x,
-                self.norm.weight,
-                self.norm.bias,
-                self.cached_weights,
-                self.bias,
-                is_rms_norm=True
-            )
+        return layer_norm_linear_quant_fn(
+            x,
+            self.norm.weight,
+            self.norm.bias,
+            self.weight,
+            self.bias,
+            is_rms_norm=True
+        )

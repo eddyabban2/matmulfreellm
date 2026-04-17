@@ -3,9 +3,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
@@ -23,6 +22,14 @@ parser.add_argument(
     default=1,
     help="sets the batch size"
 )
+
+parser.add_argument(
+    "--use_original",
+    action='store_true',
+    default=False,
+    help="changes the model to using the original implementation"
+)
+
 
 parser.add_argument(
     "-s",
@@ -52,6 +59,10 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+if(args.use_original):
+    import mmfreelm_original
+else:
+    import mmfreelm
 
 logging.set_verbosity_error()
 logging.disable_default_handler()
@@ -78,15 +89,14 @@ model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
-    for _ in range(5):
-        _ = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            top_p=0.4,
-            temperature=0.6)
-
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
     for _ in range(num_iterations):

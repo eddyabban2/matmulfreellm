@@ -92,7 +92,7 @@ class HGRNBitAttention(nn.Module):
         lower_bound: Optional[torch.Tensor] = None,
         **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Cache]]:
-        with nvtx.annotate("HGRNBitAttention forward", color="yellow"):
+        with nvtx.annotate("HGRNBitAttentionForward", color="yellow"):
             # launching the triton kernel for just one token will actually be slower
             mode = 'fused_recurrent' if hidden_states.shape[1] == 1 else self.mode
 

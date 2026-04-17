@@ -3,7 +3,6 @@ Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
     python generate_csv.py -s 32 --max_new_tokens 32 -i 15 --min_batch_power 0 --max_batch_power 12
-
 """
 
 import os
@@ -11,9 +10,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
@@ -63,7 +61,19 @@ parser.add_argument(
     help="stores the maximum batch power to go up to when profiling",
 )
 
+parser.add_argument(
+    "--use_original",
+    action='store_true',
+    default=False,
+    help="changes the model to using the original implementation"
+)
+
 args = parser.parse_args()
+
+if(args.use_original):
+    import mmfreelm_original
+else:
+    import mmfreelm
 
 logging.set_verbosity_error()
 logging.disable_default_handler()
@@ -288,18 +298,22 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
 
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    #models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-1.3B']
+    # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
+    models = ['ridger/MMfreeLM-2.7B']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename =  'csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         for model_name in models:
             row = {'device': device, 'model': model_name}
+            if args.use_original:
+                row['model'] += " Original"
+            else:
+                row['model'] += " Newer"
             print(f"Collecting data for model: {model_name}")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
@@ -315,17 +329,17 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
 
                 # profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
 
-                print(f"\t\tCollecting time to first token data...")
-                start_time = time.time()
-                row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
-                end_time = time.time()
-                print(f"\t\t\tTTTFL completed in {end_time-start_time} sec")
+                # print(f"\t\tCollecting time to first token data...")
+                # start_time = time.time()
+                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
+                # end_time = time.time()
+                # print(f"\t\t\tTTTFL completed in {end_time-start_time} sec")
 
-                print("\t\t Collecting Power data")
-                start_time = time.time()
-                get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                end_time = time.time()
-                print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
+                # print("\t\t Collecting Power data")
+                # start_time = time.time()
+                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                # end_time = time.time()
+                # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()

@@ -13,6 +13,7 @@ graphs/
 venv/
 *.nsys-rep
 *.qdstrm
+*.log
 *.pdf
 nsys_runs/
 ncu_runs/
