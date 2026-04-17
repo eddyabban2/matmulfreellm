@@ -7,6 +7,7 @@ from typing import Tuple
 import torch
 import triton
 import triton.language as tl
+import nvtx
 
 from mmfreelm.utils import contiguous
 
@@ -138,22 +139,23 @@ class FusedRecurrentHGRNFunction(torch.autograd.Function):
     @staticmethod
     @contiguous
     def forward(ctx, x, g, initial_state=None, output_final_state=False):
-        B, H, T, D = x.shape
+        with nvtx.annotate("Fused Recurrent HGRNF Unfused", color="orange"):
+            B, H, T, D = x.shape
 
-        final_state = None
-        if output_final_state:
-            final_state = x.new_empty(B, H, D)
+            final_state = None
+            if output_final_state:
+                final_state = x.new_empty(B, H, D)
 
-        o = torch.empty_like(x)
-        def grid(meta): return (triton.cdiv(D, meta['BD']), B * H)
-        fused_recurrent_hgrn_fwd_kernel[grid](
-            x, g, o, initial_state, final_state,
-            T, D,
-            USE_INITIAL_STATE=initial_state is not None,
-            STORE_FINAL_STATE=final_state is not None
-        )
-        ctx.save_for_backward(g, o, initial_state)
-        return o, final_state
+            o = torch.empty_like(x)
+            def grid(meta): return (triton.cdiv(D, meta['BD']), B * H)
+            fused_recurrent_hgrn_fwd_kernel[grid](
+                x, g, o, initial_state, final_state,
+                T, D,
+                USE_INITIAL_STATE=initial_state is not None,
+                STORE_FINAL_STATE=final_state is not None
+            )
+            ctx.save_for_backward(g, o, initial_state)
+            return o, final_state
 
     @staticmethod
     @contiguous

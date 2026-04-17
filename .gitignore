@@ -4,8 +4,15 @@ mmfreelm.egg-info
 *.svg 
 *.stdout
 *.folded
-trace.json
+trace*.json
 *.csv
 *.txt
 graphs/
 *.png
+*.sqlite
+venv/
+*.nsys-rep
+*.qdstrm
+*.pdf
+nsys_runs/
+ncu_runs/

@@ -1,15 +1,16 @@
-#!/opt/miniconda3/envs/dejavu/bin/python
-
+#!/home/eabban/matmulfreellm/venv/bin/python
 # on H100 server python is stored at /opt/miniconda3/envs/dejavu/bin/python
 # attention module we are calling is stored in:
 # -  /home/victoryang00/pytorch/third_party/flash-attention/flash_attn/ops/triton/layer_norm.py
 # - attempting to call class LayerNormLinearFn(torch.autograd.Function):
 #from torch.third_party.flash_attention.flash_attn.ops.triton.layer_norm import LayerNormLinearFn
+import nvtx
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from mmfreelm.ops.fusedbitnet import layer_norm_linear_quant_fn
 import argparse
 from torch.profiler import profile, record_function, ProfilerActivity
+from datetime import datetime
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -52,28 +53,41 @@ norm_bias = torch.zeros(D, device=device, dtype=data_type)
 linear_weight = torch.randn(O, D, device=device, dtype=data_type)
 linear_bias = torch.zeros(O, device=device, dtype=data_type)
 
+print("attempting to profile generation")
 
 # profile generate 
-with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    with_flops=True, record_shapes=True, profile_memory=True
-) as prof:
-    # Forward call
-    # is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
-    out = layer_norm_linear_quant_fn(
-        x,
-        norm_weight,
-        norm_bias,
-        linear_weight,
-        linear_bias,
-        residual=None,
-        eps=1e-6,
-        prenorm=False,
-        residual_in_fp32=False,
-        is_rms_norm=True,
-    )
-    
+
+# Forward call
+# is_rms_norm=True if you want to use RMSNorm behavior (the BitLinear used is_rms_norm=True)
+with nvtx.annotate("warmup", color="white"):
+    for _ in range(5):
+        out = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
 
 
-print(prof.key_averages().table(sort_by="cuda_time_total"))
-prof.export_chrome_trace("trace.json")
+with nvtx.annotate("workload", color="cyan"):
+    for _ in range(5):
+        out = layer_norm_linear_quant_fn(
+            x,
+            norm_weight,
+            norm_bias,
+            linear_weight,
+            linear_bias,
+            residual=None,
+            eps=1e-6,
+            prenorm=False,
+            residual_in_fp32=False,
+            is_rms_norm=True,
+        )
+
+

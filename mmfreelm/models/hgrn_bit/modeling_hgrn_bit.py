@@ -23,6 +23,7 @@ from mmfreelm.modules import FusedCrossEntropyLoss, RMSNorm
 from mmfreelm.modules.activations import swiglu_linear, swiglu
 #from mmfreelm.ops.bitnet import BitLinear_Fuse as BitLinear
 from mmfreelm.ops.fusedbitnet import FusedBitLinear as BitLinear
+import nvtx
 
 logger = logging.get_logger(__name__)
 
@@ -54,10 +55,11 @@ class HGRNBitMLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
-        y = self.gate_proj(x)
-        gate, y = y.chunk(2, -1)
-        z = self.down_proj(swiglu(gate, y))
-        return z
+        with nvtx.annotate("HGRNBitMLP", color="blue"):
+            y = self.gate_proj(x)
+            gate, y = y.chunk(2, -1)
+            z = self.down_proj(swiglu(gate, y))
+            return z
 
 
 class HGRNBitBlock(nn.Module):
@@ -95,23 +97,24 @@ class HGRNBitBlock(nn.Module):
         lower_bound: Optional[torch.Tensor] = False,
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        residual = hidden_states
-        hidden_states = self.attn_norm(hidden_states)
-        hidden_states, attentions, past_key_values = self.attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            lower_bound=lower_bound
-        )
-        hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
+        with nvtx.annotate("HGRNBitBlock forward", color="cornsilk"):
+            residual = hidden_states
+            hidden_states = self.attn_norm(hidden_states)
+            hidden_states, attentions, past_key_values = self.attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                lower_bound=lower_bound
+            )
+            hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, attentions, past_key_values)
+            outputs = (hidden_states, attentions, past_key_values)
 
-        return outputs
+            return outputs
 
 
 class HGRNBitPreTrainedModel(PreTrainedModel):
@@ -352,45 +355,47 @@ class HGRNBitForCausalLM(HGRNBitPreTrainedModel, GenerationMixin):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        with nvtx.annotate("HGRNBitForCausalLM", color="magenta"):
+            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+            output_hidden_states = (
+                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            )
+            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict
-        )
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                inputs_embeds=inputs_embeds,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict
+            )
 
-        hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
+            hidden_states = outputs[0]
+            with nvtx.annotate("Compute Final Outputs", color="darkviolet"):
+                logits = self.lm_head(hidden_states)
 
-        loss = None
-        if labels is not None:
-            if self.config.fuse_cross_entropy:
-                loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
-            else:
-                loss_fct = nn.CrossEntropyLoss()
-            # Enable model parallelism
-            labels = labels.to(logits.device)
-            labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
-            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+            loss = None
+            if labels is not None:
+                if self.config.fuse_cross_entropy:
+                    loss_fct = FusedCrossEntropyLoss(inplace_backward=True)
+                else:
+                    loss_fct = nn.CrossEntropyLoss()
+                # Enable model parallelism
+                labels = labels.to(logits.device)
+                labels = torch.cat((labels[..., 1:], torch.full_like(labels[:, :1], loss_fct.ignore_index)), 1)
+                loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
+            if not return_dict:
+                output = (logits,) + outputs[1:]
+                return (loss,) + output if loss is not None else output
 
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
+            return CausalLMOutputWithPast(
+                loss=loss,
+                logits=logits,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
