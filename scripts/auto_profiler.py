@@ -65,6 +65,28 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+memory_metrics = [
+    "dram__bytes.sum", 
+    "dram__throughput.sum.pct_of_peak_sustained_elapsed", # throughput as a percentage
+    "dram__bytes.sum.per_second"  
+]
+
+time_metrics = [
+    "gpu__time_duration.sum"
+]
+stall_metrics = [
+    "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle"
+]
+usage_metrics = [
+    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
+    "sm__cycles_elapsed.avg", # count of all cycles across SMs 
+    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
+    "sm__cycles_active.avg", # avg active cycles across SMs
+    "sm__cycles_active.sum" # sum of all active cycles across SMs
+    "sm__throughput.sum.pct_of_peak_sustained_elapsed" # peak throughoutput percentage
+    "sm__throughput.avg.pct_of_peak_sustained_elapsed" # peak throughoutput percentage
+]
+
 double_precision_metrics = [ "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
         "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
         "sm__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
@@ -76,11 +98,14 @@ half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
         "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
 tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
         "sm__ops_path_tensor_op_imma_pred_on.sum"]
-metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
+metrics_string = ",".join(memory_metrics + 
         double_precision_metrics + 
         single_precision_metrics + 
         half_precision_metrics +
-         tensor_core_metrics)
+        tensor_core_metrics+ 
+        time_metrics + 
+        stall_metrics + 
+        usage_metrics)
 
 
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
@@ -146,7 +171,7 @@ def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info(f"row generated: {results}")
     return results
 
-def get_kernels_from_data_frame(df): 
+def get_kernels_from_data_frame(df, bs, new_tokens, seq_len): 
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
         "Kbyte": 1,
@@ -196,6 +221,7 @@ def get_kernels_from_data_frame(df):
              df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
         )
     df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
     df_flat.to_csv(f"outputs/csvs/kernels-{curr_date}.csv")
 
 def extract_flops(df): 
@@ -296,7 +322,7 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
-    get_kernels_from_data_frame(first_pair)
+    get_kernels_from_data_frame(first_pair, bs, new_tokens, seq_len)
 
     logger.info(f"full workload row generated: {full_workload_row}")
     return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
