@@ -1,5 +1,6 @@
 import subprocess
 import argparse
+import os
 
 parser = argparse.ArgumentParser(
     description="profiles layer norm"
@@ -15,7 +16,7 @@ parser.add_argument(
 parser.add_argument(
     "-b",
     "--batch_size",
-    default="128",
+    default="1024",
     help="sets the batch size"
 )
 
@@ -45,9 +46,10 @@ num_iterations = args.iterations
 batch_size = args.batch_size
 seq_len = args.sequence_length
 max_new_tokens = args.max_new_tokens
-
+os.chdir('../')
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
 print(f"Extracted ncu path: {ncu_path}")
+report_name = os.getcwd() + f"/outputs/ncu_runs/generatebatch{batch_size}seq{seq_len}newtok{max_new_tokens}"
 
 command = [
     ncu_path, 
@@ -55,13 +57,13 @@ command = [
     "--nvtx-include", "workload/",
     "--nvtx-exclude", "warmup/",
     "--config-file", "off",
-    "--export", "/home/eabban/matmulfreellm/ncu_runs/generate",
+    "--export", report_name,
     "--force-overwrite",
     "--replay-mode", "application",
     "--app-replay-match", "name",
     "--target-processes", "application-only",
     "--set", metric_profile,
-    "python", "/home/eabban/matmulfreellm/quiet_run.py",
+    "python", os.getcwd() + "/quiet_run.py",
     "-b", batch_size,
     "-s", seq_len,
     "-n", max_new_tokens,

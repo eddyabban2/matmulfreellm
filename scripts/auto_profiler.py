@@ -170,8 +170,7 @@ def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     results['Input Sequence Length'] = seq_len
     logger.info(f"row generated: {results}")
     return results
-
-def get_kernels_from_data_frame(df, bs, new_tokens, seq_len): 
+def flatten_kernels(df, bs, new_tokens, seq_len):
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
         "Kbyte": 1,
@@ -222,7 +221,7 @@ def get_kernels_from_data_frame(df, bs, new_tokens, seq_len):
         )
     df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
-    df_flat.to_csv(f"outputs/csvs/kernels-{curr_date}.csv")
+    return df_flat
 
 def extract_flops(df): 
     # Multiply Accumulate is two instructions so we cound all of them a second time
@@ -322,7 +321,8 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
-    get_kernels_from_data_frame(first_pair, bs, new_tokens, seq_len)
+    flatten_kernels(first_pair, bs, new_tokens, seq_len).to_csv(f"outputs/csvs/first_layer_kernels-{curr_date}.csv")
+    flatten_kernels(df, bs, new_tokens, seq_len).to_csv(f"outputs/csvs/all_kernels-{curr_date}.csv")
 
     logger.info(f"full workload row generated: {full_workload_row}")
     return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
