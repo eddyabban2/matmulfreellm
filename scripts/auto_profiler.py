@@ -100,13 +100,13 @@ half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
         "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
 tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
         "sm__ops_path_tensor_op_imma_pred_on.sum"]
-metrics_string = ",".join(# memory_metrics + 
-        # double_precision_metrics + 
-        # single_precision_metrics + 
-        # half_precision_metrics +
-        # tensor_core_metrics+ 
+metrics_string = ",".join(memory_metrics + 
+        double_precision_metrics + 
+        single_precision_metrics + 
+        half_precision_metrics +
+        tensor_core_metrics+ 
         time_metrics + 
-        # stall_metrics + 
+        stall_metrics + 
         usage_metrics)
 
 
