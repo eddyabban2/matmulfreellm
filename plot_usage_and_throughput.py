@@ -81,12 +81,14 @@ def main():
         return
     print(f"Kernel Count: {len(df)}")
     df["fraction of active cycles"] = df["sm__cycles_active.avg (cycle)"] / df["sm__cycles_elapsed.avg (cycle)"]
+    df["Half Preciscion Instruction Count"] = 
     # check to see if 
     # 2. Plot the required metrics
     plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
     plot_metric(df, "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)")
     plot_metric(df, "Compute Intensity")
     plot_metric(df, "fraction of active cycles")
+    plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
     
     
 

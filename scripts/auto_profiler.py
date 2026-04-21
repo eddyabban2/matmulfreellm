@@ -78,16 +78,28 @@ stall_metrics = [
     "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle"
 ]
 usage_metrics = [
-    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
     "sm__cycles_elapsed.avg", # count of all cycles across SMs 
-    "smsp__cycles_active.sum.avg",
-    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
     "sm__cycles_active.avg", # avg active cycles across SMs
-    "smsp__cycles_active.sum.avg",
-    "smsp__cycles_active.sum.sum",
-    "sm__cycles_active.sum", # sum of all active cycles across SMs
+    "sm__cycles_elapsed.sum", # count of all cycles across SMs 
+    "sm__cycles_active.sum", # avg active cycles across SMs
+    
+    "smsp__cycles_active.sum",
+    "smsp__cycles_active.avg",
+    "smsp__cycles_elapsed.sum",
+    "smsp__cycles_elapsed.avg",
+    
+    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
+    "sm__cycles_active.avg.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
+
     "sm__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
     "sm__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
+
+    "smsp__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
+    "smsp__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
+
+    "smsp__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
+    "smsp__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
+
     "sm__warps_active.avg", 
     "sm__warps_active.avg"
 ]
