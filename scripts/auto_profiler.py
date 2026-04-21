@@ -80,8 +80,11 @@ stall_metrics = [
 usage_metrics = [
     "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
     "sm__cycles_elapsed.avg", # count of all cycles across SMs 
+    "smsp__cycles_active.sum.avg",
     "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
     "sm__cycles_active.avg", # avg active cycles across SMs
+    "smsp__cycles_active.sum.avg",
+    "smsp__cycles_active.sum.sum",
     "sm__cycles_active.sum", # sum of all active cycles across SMs
     "sm__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
     "sm__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
@@ -100,6 +103,20 @@ half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
         "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
 tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
         "sm__ops_path_tensor_op_imma_pred_on.sum"]
+
+double_precision_metrics += [ "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
+single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum"]
+half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum",
+       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum"]
+tensor_core_metrics += ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
+       "smsp__ops_path_tensor_op_imma_pred_on.sum"]
+
+       
 metrics_string = ",".join(memory_metrics + 
         double_precision_metrics + 
         single_precision_metrics + 
@@ -131,7 +148,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         # "--target-processes", "all",
         "--target-processes", "application-only",
         "--metrics", metrics_string,
-        "python", "quiet_run.py",
+        "python", os.getcwd() + "/quiet_run.py",
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),

@@ -58,6 +58,7 @@ parser.add_argument(
     help="sets the model name to be used"
 )
 
+print("quiet run is running")
 args = parser.parse_args()
 if(args.use_original):
     import mmfreelm_original

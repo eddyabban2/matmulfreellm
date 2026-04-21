@@ -65,35 +65,38 @@ mem_bottlenecks = [
 
 # Benchmarks
 AI_v = {
-  "Batche Size 1, Sequence Length 1, New Tokens 1" : 0.1269687638549921,
-  "Batche Size 1, Sequence Length 161, New Tokens 10" : 2.3064084987727007,
-  "Batche Size 2, Sequence Length 161, New Tokens 10" : 4.543776531098708,
-  "Batche Size 4, Sequence Length 161, New Tokens 10" : 8.978527702004381,
-  "Batche Size 8, Sequence Length 161, New Tokens 10" : 17.681746251522913,
-  "Batche Size 16, Sequence Length 161, New Tokens 10" : 34.49388773836415,
-  "Batche Size 32, Sequence Length 161, New Tokens 10" : 65.32298888915327,
-  "Batche Size 64, Sequence Length 161, New Tokens 10" : 116.95692850303338,
-  "Batche Size 128, Sequence Length 161, New Tokens 10" : 172.45478562645658,
-  "Batche Size 256, Sequence Length 161, New Tokens 10" : 219.01945752689767,
-  "Batche Size 512, Sequence Length 161, New Tokens 10" : 270.18574011645507,
-  "Batche Size 1024, Sequence Length 161, New Tokens 10" : 277.12087376676527
-  # "MyCPUIntensiveBenchmark" : 30
+  "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1" : 6.882442748091603,
+  "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1" : 3.5191431943031537,
+
+  "(GEMM Kernels) Batch Size 1, Sequence Length 161, New Tokens 1" : 0.10547639484978541,
+  "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 0.1269359383082901,
+
+  # "(Sigmoid Kernels) Batch Size 1, Sequence Length 161, New Tokens 1" : 5.414220545033318,
+  # "(Sigmoid Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 3.4061410418195157,
+
+  # "(Swiglu Kernels) Batch Size 1, Sequence Length 161, New Tokens 1" : 4.299020971302428,
+  # "(Swiglu Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 2.7353975077773938,
+
+  "(Fused Recurrent HGRN Kernels) Batch Size 1, Sequence Length 161, New Tokens 1" : 1.4959036144578313,
+  "(Fused Recurrent HGRN Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 0.5391829997797021
 }
 
 # Datapoints
 datapoints = [
-  {"AI" : "Batche Size 1, Sequence Length 1, New Tokens 1",        "GFLOP/s" : 61.89,  "label"  : "Batche Size 1, Sequence Length 1, New Tokens 1"},
-  {"AI" : "Batche Size 1, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 916.83138757,  "label"  :   "Batche Size 1, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 2, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 1807.46644679,  "label"  :  "Batche Size 2, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 4, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 3588.73656523,  "label"  :  "Batche Size 4, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 8, Sequence Length 161, New Tokens 10",     "GFLOP/s" : 7151.27680211,  "label"  :  "Batche Size 8, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 16, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 14276.35727587,  "label"  : "Batche Size 16, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 32, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 28526.51822339,  "label"  : "Batche Size 32, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 64, Sequence Length 161, New Tokens 10",    "GFLOP/s" : 57026.84011843,  "label"  : "Batche Size 64, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 128, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 114027.48390851,  "label"  : "Batche Size 128, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 256, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 228028.77148867,  "label"  : "Batche Size 256, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 512, Sequence Length 161, New Tokens 10",   "GFLOP/s" : 456031.34664899,  "label"  : "Batche Size 512, Sequence Length 161, New Tokens 10"},
-  {"AI" : "Batche Size 1024, Sequence Length 161, New Tokens 10",  "GFLOP/s" : 912036.49696963,  "label"  : "Batche Size 1024, Sequence Length 161, New Tokens 10"},
+  {"AI" : "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1012.3228070175439,  "label"  : "Layer Norm Small Batch"},
+  {"AI" : "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 5020.780493468795,  "label"  : "Layer Norm Large Batch"},
+
+  {"AI" : "(GEMM Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 74.81278538812785,  "label"  : "GEMM Small Batch"},
+  {"AI" : "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 62.066447058823535,  "label"  : "GEMM Large Batch"},
+
+  # {"AI" : "(Sigmoid Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1025.737556561086,  "label"  : "Sigmoid Small Batch"},
+  # {"AI" : "(Sigmoid Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 4999.321847002068,  "label"  : "Sigmoid Large Batch"},
+
+  # {"AI" : "(Swiglu Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1288.0085416666668,  "label"  : "Swiglu Small Batch"},
+  # {"AI" : "(Swiglu Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 4052.700171561725,  "label"  : "Swiglu Large Batch"},
+
+  {"AI" : "(Fused Recurrent HGRN Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 30.9394467979068,  "label"  : "Fused Recurrent HGRN Small Batch"},
+  {"AI" : "(Fused Recurrent HGRN Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 707.7841348934467,  "label"  : "Fused Recurrent HGRN Large Batch"}
 
   #{"AI" : 10,                        "GFLOPs" : 1000.00,  "label"  : "I'm pretty cool",  "prop" : ["whatever", "..."]},
   #{"AI" : "MyCPUIntensiveBenchmark", "GFLOPs" : 3000.00, "label"  : "I'm unbelievable", "prop" : ["whatever", "..."]},
