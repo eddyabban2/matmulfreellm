@@ -75,7 +75,7 @@ time_metrics = [
     "gpu__time_duration.sum"
 ]
 stall_metrics = [
-    "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle"
+    # "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle"
 ]
 usage_metrics = [
     "sm__cycles_elapsed.avg", # count of all cycles across SMs 
@@ -87,6 +87,7 @@ usage_metrics = [
     "smsp__cycles_active.avg",
     "smsp__cycles_elapsed.sum",
     "smsp__cycles_elapsed.avg",
+    "smsp__cycles_elapsed.avg.per_second",
     
     "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
     "sm__cycles_active.avg.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
@@ -128,6 +129,15 @@ half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum"
 tensor_core_metrics += ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
        "smsp__ops_path_tensor_op_imma_pred_on.sum"]
 
+double_precision_metrics += ["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed" ]
+single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed" ]
+half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed",
+       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed"]
        
 metrics_string = ",".join(memory_metrics + 
         double_precision_metrics + 
@@ -169,7 +179,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
     logger.debug(f"running command {' '.join(benchmark_command)}")
     logger.debug(f"this is changing")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info("extracting data")
@@ -249,7 +259,21 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
              df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
-        )
+    )
+
+    df_flat["Single Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                    df_flat['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                    (df_flat['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+            ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df_flat["Half Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                df_flat['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                (df_flat['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+        ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df_flat["Double Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                df_flat['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                (df_flat['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+        ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+
     df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
     return df_flat
