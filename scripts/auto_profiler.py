@@ -175,7 +175,35 @@ tensor_core_metrics += [
     "sm__sass_thread_inst_executed_op_bmma_pred_on.sum",
     "smsp__sass_thread_inst_executed_op_bmma_pred_on.sum",
     "sm__sass_thread_inst_executed_op_wgmma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_wgmma_pred_on.sum"
+    "smsp__sass_thread_inst_executed_op_wgmma_pred_on.sum", 
+
+    "sm__inst_executed_pipe_tensor.sum",
+    "sm__inst_executed_pipe_tensor_op_hmma.sum", 
+    "sm__inst_executed_pipe_tensor_op_imma.sum",                      
+    "sm__ops_path_tensor_src_bf16_dst_fp32.sum",                                                             
+    "sm__ops_path_tensor_src_bf16_dst_fp32_sparsity_off.sum",                                            
+    "sm__ops_path_tensor_src_bf16_dst_fp32_sparsity_on.sum",                                                
+    "sm__ops_path_tensor_src_fp16_dst_fp16.sum",                                                          
+    "sm__ops_path_tensor_src_fp16_dst_fp16_sparsity_off.sum",                                             
+    "sm__ops_path_tensor_src_fp16_dst_fp16_sparsity_on.sum",                                             
+    "sm__ops_path_tensor_src_fp16_dst_fp32.sum",                                                        
+    "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",
+    "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_on.sum",                                            
+    "sm__ops_path_tensor_src_fp64.sum",                      
+    "sm__ops_path_tensor_src_int1.sum",                      
+    "sm__ops_path_tensor_src_int4.sum",                      
+    "sm__ops_path_tensor_src_int4_sparsity_off.sum",                                              
+    "sm__ops_path_tensor_src_int4_sparsity_on.sum",                                             
+    "sm__ops_path_tensor_src_int8.sum",                      
+    "sm__ops_path_tensor_src_int8_sparsity_off.sum",                                                    
+    "sm__ops_path_tensor_src_int8_sparsity_on.sum",          
+    "sm__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
+    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_off.sum",
+    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum",
+    "sm__pipe_tensor_cycles_active.sum",        
+    "sm__pipe_tensor_op_hmma_cycles_active.sum",
+    "sm__pipe_tensor_op_imma_cycles_active.sum" 
+                                                  
 ]
        
 metrics_string = ",".join(memory_metrics + 
