@@ -74,8 +74,27 @@ memory_metrics = [
 time_metrics = [
     "gpu__time_duration.sum"
 ]
+# https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-reference
 stall_metrics = [
-    # "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle"
+    "smsp__pcsamp_warps_issue_stalled_barrier", # barrier stall
+    "smsp__pcsamp_warps_issue_stalled_branch_resolving", # branch stall
+    "smsp__pcsamp_warps_issue_stalled_dispatch_stall", # dispatch stall 
+    "smsp__pcsamp_warps_issue_stalled_drain", # deallocation of memory resources
+    # "smsp__pcsamp_warps_issue_stalled_imc_miss", # imc miss (does not apear in our workload?)
+    "smsp__pcsamp_warps_issue_stalled_lg_throttle", # l1 instruction cache stall 
+    "smsp__pcsamp_warps_issue_stalled_long_scoreboard", # scoreboard stall?
+    "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle", # mat pipeline stall
+    "smsp__pcsamp_warps_issue_stalled_membar", # memory barrier
+    "smsp__pcsamp_warps_issue_stalled_mio_throttle", # memory input and output stall 
+    "smsp__pcsamp_warps_issue_stalled_misc", # misc hardware stall
+    "smsp__pcsamp_warps_issue_stalled_no_instructions", # no instructions issued 
+    "smsp__pcsamp_warps_issue_stalled_not_selected", # waiting to be selected 
+    "smsp__pcsamp_warps_issue_stalled_selected", # instruction issued?
+    "smsp__pcsamp_warps_issue_stalled_short_scoreboard", # score board?
+    "smsp__pcsamp_warps_issue_stalled_sleeping", # all threads are sleeping
+    "smsp__pcsamp_warps_issue_stalled_tex_throttle", # tex stall?
+    "smsp__pcsamp_warps_issue_stalled_wait", # fixed latency stall?
+    "smsp__pcsamp_warps_issue_stalled_warpgroup_arrive" # war group wait
 ]
 usage_metrics = [
     "sm__cycles_elapsed.avg", # count of all cycles across SMs 
@@ -138,6 +157,26 @@ single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.su
 half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed",
        "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed",
        "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed"]
+
+tensor_core_metrics += [
+    # HMMA — Half precision Matrix Multiply Accumulate (FP16/BF16)
+    "sm__sass_thread_inst_executed_op_hmma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_hmma_pred_on.sum",
+
+    # IMMA — Integer Matrix Multiply Accumulate (INT8/INT4)
+    "sm__sass_thread_inst_executed_op_imma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_imma_pred_on.sum",
+
+    # DMMA — Double precision MMA (Ampere A100+ only)
+    "sm__sass_thread_inst_executed_op_dmma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_dmma_pred_on.sum",
+
+    # BMMA — Binary MMA (Turing+)
+    "sm__sass_thread_inst_executed_op_bmma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_bmma_pred_on.sum",
+    "sm__sass_thread_inst_executed_op_wgmma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_wgmma_pred_on.sum"
+]
        
 metrics_string = ",".join(memory_metrics + 
         double_precision_metrics + 
@@ -179,7 +218,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
     logger.debug(f"running command {' '.join(benchmark_command)}")
     logger.debug(f"this is changing")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info("extracting data")
@@ -297,6 +336,13 @@ def extract_dram_usage(df):
     total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
     return total_kilo_bytes
 
+def extract_run_time(df):
+    run_time_us = 0 
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
+    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
+    return run_time_us
+
 def get_metrics_from_data_frame(df):
     total_kilo_bytes = 0
     double_precision_count = 0 
@@ -316,9 +362,7 @@ def get_metrics_from_data_frame(df):
 
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
 
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
+    run_time_us += extract_run_time(df)
 
     valid_time_units = ["ms", "us"]
     invalid_time_rows = df[(df["Metric Name"] == "gpu__time_duration.sum") & (~df["Metric Unit"].isin(valid_time_units))]
@@ -386,18 +430,29 @@ def extract_additional_workload_data(df, workload_str):
     # fraction of 16, 32, adn 64 bit floating point operations 
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
     flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
+    run_time_us = extract_run_time(df)
     dram_kbytes_accessed = extract_dram_usage(df)
 
     atten_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')]
     atten_double_precision_count, atten_single_precision_count, atten_half_precision_count, atten_tensor_count = extract_flops(atten_df)
     atten_flop_count = atten_double_precision_count +  atten_single_precision_count +  atten_half_precision_count +  atten_tensor_count
+    atten_run_time_us = extract_run_time(atten_df)
+    atten_dram_kbytes_accessed = extract_dram_usage(atten_df)
 
     mlp_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')]
     mlp_double_precision_count, mlp_single_precision_count, mlp_half_precision_count, mlp_tensor_count = extract_flops(mlp_df)
     mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
+    mlp_run_time_us = extract_run_time(mlp_df)
+    mlp_dram_kbytes_accessed = extract_dram_usage(mlp_df)
+
+    linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')]
+    linear_double_precision_count, linear_single_precision_count, linear_half_precision_count, linear_tensor_count = extract_flops(linear_df)
+    linear_flop_count = linear_double_precision_count +  linear_single_precision_count +  linear_half_precision_count +  linear_tensor_count
+    linear_run_time_us = extract_run_time(linear_df)
+    linear_dram_kbytes_accessed = extract_dram_usage(linear_df)
 
 
-    with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "a") as f:
+    with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "w") as f:
         f.write(f"{workload_str}\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
@@ -412,6 +467,15 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitMLP\n")
+        f.write(f"{(linear_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Linear\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitAttentionForward\n")
+        f.write(f"{(mlp_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitMLP\n")
+        f.write(f"{(linear_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Linear\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with HGRNBitAttentionForward\n")
+        f.write(f"{(mlp_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with  HGRNBitMLP\n")
+        f.write(f"{(linear_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Linear\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
         f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
@@ -422,6 +486,11 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
         f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
         f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(linear_double_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 64 bit floating point operations\n")
+        f.write(f"{(linear_single_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 32 bit floating point operations\n")
+        f.write(f"{(linear_half_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 16 bit floating point operations\n")
+        f.write(f"{(linear_tensor_count/linear_flop_count)*100}% of the FLOPs in Linear are tensor floating point operations\n")
 
     # fraction of 
 
@@ -436,68 +505,6 @@ def log_full_df(df):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
         logger.info(df)
 
-def parse_data_from_ncu_files(data):
-    dram_kernel_count = 0 
-    total_kilo_bytes = 0
-    double_precision_count = 0 
-    single_precision_count = 0 
-    half_precision_count = 0 
-    tensor_count = 0
-    run_time_us = 0
-    flop_metrics = double_precision_metrics + single_precision_metrics + half_precision_metrics + tensor_core_metrics
-    for line in data: 
-        if "dram__bytes.sum" in line:
-            words = line.split()
-            value = float(words[2])
-            if('Mbyte' in line):
-                value *= 1000
-            if('Gbyte' in line):
-                value *= 1e6
-            if("Kbyte" not in line and 'Mbyte' not in line and 'Gbyte' not in line):
-                logger.error(f"warning non standard value found in line{line}")
-                exit()
-            total_kilo_bytes += value
-        elif any(metric in line for metric in flop_metrics):
-            words = line.split()
-            value = int(words[2].replace("," , ""))
-            if any(metric in line for metric in double_precision_metrics):
-                double_precision_count += value
-            elif any(metric in line for metric in single_precision_metrics):
-                single_precision_count += value
-            elif any(metric in line for metric in half_precision_metrics):
-                half_precision_count += value
-            elif any(metric in line for metric in tensor_core_metrics):
-                tensor_count += value
-        elif "gpu__time_duration.sum" in line:
-            value = float(words[2])
-            if('ms' == words[1]):
-                value *= 1e3
-            if("us" not in line and 'ms' not in line):
-                logger.error(f"warning non standard value time value in line: {line}")
-                exit()
-            run_time_us += value
-    return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us
-
-# def get_data(bs, new_tokens, seq_len):
-#     row = {}
-#     row['Model Name'] = 'ridger/MMfreeLM-2.7B'
-#     row['Batch Size'] = bs
-#     row['Tokens Generated'] = new_tokens 
-#     row['Input Sequence Length'] = seq_len
-#     data = get_ncu_data(bs, new_tokens, seq_len)
-#     row["GigaBytes Accessed"] = data["KiloBytes Accessed"] / 1e6
-#     row["Double Precision FLOPs"] = data["Double Precision FLOPs"]
-#     row["Single Precision FLOPs"] = data["Single Precision FLOPs"]
-#     row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
-#     row["Tensor FLOPs"] = data["Tensor FLOPs"] 
-#     row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
-#     row["Run Time (s)"] = data["Run Time (s)"]
-#     # row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
-#     row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
-#     row["GFLOP/s"] = row["(NCU) Total GFLOPs"] / row["Run Time (s)"]
-#     # row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
-#     print(row)
-#     return row
 
 def main():
     logger.info("Extracting Roofline Data")
