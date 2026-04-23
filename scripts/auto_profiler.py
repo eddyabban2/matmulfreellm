@@ -1,5 +1,5 @@
 # Used To Collect Roofline Data
-#   python auto_profiler.py -s 20 --max_new_tokens 10 --min_batch_power 6 --max_batch_power 6 
+#   python auto_profiler.py -s 100 --max_new_tokens 1 --min_batch_power 10 --max_batch_power 10
 
 import subprocess
 import argparse
@@ -189,20 +189,25 @@ tensor_core_metrics += [
     "sm__ops_path_tensor_src_fp16_dst_fp32.sum",                                                        
     "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",
     "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_on.sum",                                            
-    "sm__ops_path_tensor_src_fp64.sum",                      
-    "sm__ops_path_tensor_src_int1.sum",                      
-    "sm__ops_path_tensor_src_int4.sum",                      
-    "sm__ops_path_tensor_src_int4_sparsity_off.sum",                                              
-    "sm__ops_path_tensor_src_int4_sparsity_on.sum",                                             
-    "sm__ops_path_tensor_src_int8.sum",                      
-    "sm__ops_path_tensor_src_int8_sparsity_off.sum",                                                    
-    "sm__ops_path_tensor_src_int8_sparsity_on.sum",          
+    # "sm__ops_path_tensor_src_fp64.sum",                      
+    # "sm__ops_path_tensor_src_int1.sum",                      
+    # "sm__ops_path_tensor_src_int4.sum",                      
+    # "sm__ops_path_tensor_src_int4_sparsity_off.sum",                                              
+    # "sm__ops_path_tensor_src_int4_sparsity_on.sum",                                             
+    # "sm__ops_path_tensor_src_int8.sum",                      
+    # "sm__ops_path_tensor_src_int8_sparsity_off.sum",                                                    
+    # "sm__ops_path_tensor_src_int8_sparsity_on.sum",          
     "sm__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
     "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_off.sum",
-    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum",
-    "sm__pipe_tensor_cycles_active.sum",        
-    "sm__pipe_tensor_op_hmma_cycles_active.sum",
-    "sm__pipe_tensor_op_imma_cycles_active.sum" 
+    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum", 
+    # "sm__pipe_tensor_cycles_active.sum",        
+    # "sm__pipe_tensor_op_hmma_cycles_active.sum",
+    # "sm__pipe_tensor_op_imma_cycles_active.sum", 
+    "smsp__inst_executed_pipe_tensor_op_hmma.sum", # half precision matrix multiply count
+    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",  # math ops count
+    "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed", 
+    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed"
+
                                                   
 ]
        
@@ -244,9 +249,8 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-i", "1"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    logger.debug(f"this is changing")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info("extracting data")
@@ -340,6 +344,13 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
                 df_flat['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
                 (df_flat['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
         ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    # "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed (inst/cycle)", # half precision matrix multiply count
+    # "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum" # math ops count
+    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Billion Inst/s)"] = ((df_flat['smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed (inst/cycle)']) 
+        * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    
+    df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = ((df_flat['smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed (nan)']) 
+        * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
 
     df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"

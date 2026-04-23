@@ -200,11 +200,15 @@ def main():
     plot_metric(df, "Compute Intensity")
     plot_metric(df, "fraction of active cycles")
     plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
-    plot_metric(df, "Single Precision GFLOP/s")
+    # plot_metric(df, "Single Precision GFLOP/s")
     plot_metric(df, "Half Precision GFLOP/s")
     plot_metric(df, "Double Precision GFLOP/s")
-    plot_multi_metric(df, ["Single Precision GFLOP/s", "Half Precision GFLOP/s"], "GFLOP Per Second", "Single and Half Precision GFLOPs Per Second")
-    plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
+    plot_multi_metric(df, [
+        "Single Precision GFLOP/s", 
+        "Half Precision GFLOP/s", 
+        "Half Precision Matrix Multiply and Accumulate Instructions (Billion Inst/s)"], "GFLOP Per Second", "~GFLOPs Per Second")
+    
+    plot_multi_metric(df, ["Single Precision GFLOP/s"], "Single Precision GFLOP Per Second", "Single Precision GFLOPs Per Second")
     plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
     plot_multi_metric_stacked_bar_chart(df, "stall count", "Stall Count")
     
