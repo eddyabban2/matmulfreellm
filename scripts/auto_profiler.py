@@ -321,15 +321,18 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     ).reset_index()
 
     df_flat.columns.name = None
-    flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+    double_precision_flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
              df_flat["sm__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
+    single_precision_flops =(df_flat["sm__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"]+
+             df_flat["sm__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
+    half_precision_flops = (
              df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
+             df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
+    tensor_flops= (
+        df_flat["smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum (nan)"]
     )
 
     df_flat["Single Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
@@ -352,7 +355,10 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = ((df_flat['smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed (nan)']) 
         * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
 
-    df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
     return df_flat
 
