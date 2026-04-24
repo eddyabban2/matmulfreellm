@@ -159,56 +159,29 @@ half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.
        "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed"]
 
 tensor_core_metrics += [
-    # HMMA — Half precision Matrix Multiply Accumulate (FP16/BF16)
-    "sm__sass_thread_inst_executed_op_hmma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_hmma_pred_on.sum",
-
-    # IMMA — Integer Matrix Multiply Accumulate (INT8/INT4)
-    "sm__sass_thread_inst_executed_op_imma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_imma_pred_on.sum",
-
-    # DMMA — Double precision MMA (Ampere A100+ only)
-    "sm__sass_thread_inst_executed_op_dmma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_dmma_pred_on.sum",
-
-    # BMMA — Binary MMA (Turing+)
-    "sm__sass_thread_inst_executed_op_bmma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_bmma_pred_on.sum",
-    "sm__sass_thread_inst_executed_op_wgmma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_wgmma_pred_on.sum", 
-
-    "sm__inst_executed_pipe_tensor.sum",
-    "sm__inst_executed_pipe_tensor_op_hmma.sum", 
-    "sm__inst_executed_pipe_tensor_op_imma.sum",                      
-    "sm__ops_path_tensor_src_bf16_dst_fp32.sum",                                                             
-    "sm__ops_path_tensor_src_bf16_dst_fp32_sparsity_off.sum",                                            
-    "sm__ops_path_tensor_src_bf16_dst_fp32_sparsity_on.sum",                                                
-    "sm__ops_path_tensor_src_fp16_dst_fp16.sum",                                                          
-    "sm__ops_path_tensor_src_fp16_dst_fp16_sparsity_off.sum",                                             
-    "sm__ops_path_tensor_src_fp16_dst_fp16_sparsity_on.sum",                                             
-    "sm__ops_path_tensor_src_fp16_dst_fp32.sum",                                                        
-    "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",
-    "sm__ops_path_tensor_src_fp16_dst_fp32_sparsity_on.sum",                                            
-    # "sm__ops_path_tensor_src_fp64.sum",                      
-    # "sm__ops_path_tensor_src_int1.sum",                      
-    # "sm__ops_path_tensor_src_int4.sum",                      
-    # "sm__ops_path_tensor_src_int4_sparsity_off.sum",                                              
-    # "sm__ops_path_tensor_src_int4_sparsity_on.sum",                                             
-    # "sm__ops_path_tensor_src_int8.sum",                      
-    # "sm__ops_path_tensor_src_int8_sparsity_off.sum",                                                    
-    # "sm__ops_path_tensor_src_int8_sparsity_on.sum",          
-    "sm__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
-    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_off.sum",
-    "sm__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum", 
-    # "sm__pipe_tensor_cycles_active.sum",        
-    # "sm__pipe_tensor_op_hmma_cycles_active.sum",
-    # "sm__pipe_tensor_op_imma_cycles_active.sum", 
+    "smsp__inst_executed_pipe_tensor.sum",
+    "smsp__inst_executed_pipe_tensor_op_imma.sum",                      
+    "smsp__ops_path_tensor_src_bf16_dst_fp32.sum",                                                             
+    "smsp__ops_path_tensor_src_bf16_dst_fp32_sparsity_off.sum",                                            
+    "smsp__ops_path_tensor_src_bf16_dst_fp32_sparsity_on.sum",                                                
+    "smsp__ops_path_tensor_src_fp16_dst_fp16.sum",                                                          
+    "smsp__ops_path_tensor_src_fp16_dst_fp16_sparsity_off.sum",                                             
+    "smsp__ops_path_tensor_src_fp16_dst_fp16_sparsity_on.sum",                                             
+    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",                                                        
+    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",
+    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_on.sum",                                                     
+    "smsp__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
+    "smsp__ops_path_tensor_src_tf32_dst_fp32_sparsity_off.sum",
+    "smsp__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum", 
+    
     "smsp__inst_executed_pipe_tensor_op_hmma.sum", # half precision matrix multiply count
-    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",  # math ops count
+    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",  # math ops count
     "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed", 
-    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed"
-
-                                                  
+    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_cycle_elapsed", 
+    
+    # 6000 specific metrics 
+    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed",
+    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
 ]
        
 metrics_string = ",".join(memory_metrics + 
@@ -250,7 +223,7 @@ def run_ncu_profile(bs, new_tokens, seq_len):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    subprocess.run(benchmark_command, check=True)
     
 def extract_data_from_ncu_files(bs, new_tokens, seq_len):
     logger.info("extracting data")
@@ -319,6 +292,9 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
         values="Metric Value",
         aggfunc="first"
     ).reset_index()
+    
+    logger.info(list(df_flat.columns.values))
+
 
     df_flat.columns.name = None
     double_precision_flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
@@ -331,9 +307,9 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
              df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
              df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
-    tensor_flops= (
-        df_flat["smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum (nan)"]
-    )
+    # tensor_flops= (
+    #     df_flat["smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum (nan)"]
+    # )
 
     df_flat["Single Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
                     df_flat['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
@@ -347,9 +323,19 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
                 df_flat['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
                 (df_flat['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
         ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    # "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed (inst/cycle)", # half precision matrix multiply count
-    # "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum" # math ops count
-    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Billion Inst/s)"] = ((df_flat['smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed (inst/cycle)']) 
+
+    tensor_flop_rate= None 
+    if "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed" in df_flat: 
+        tensor_flop_rate = "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed"
+    elif "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed" in df_flat:
+        tensor_flop_rate = "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed"
+    
+    tensor_flop_count = None 
+    if "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum" in df_flat: 
+        tensor_flop_count = "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
+    elif "smsp__inst_executed_pipe_tensor_op_hmma.sum" in df_flat:
+        tensor_flop_count = "smsp__inst_executed_pipe_tensor_op_hmma.sum"
+    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Billion Inst/s)"] = ((df_flat[tensor_flop_rate]) 
         * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
     
     df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = ((df_flat['smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed (nan)']) 
@@ -358,7 +344,7 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    # df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
     return df_flat
 
