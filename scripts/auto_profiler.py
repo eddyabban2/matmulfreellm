@@ -18,7 +18,6 @@ import datetime
 
 from pathlib import Path
 sys.path.append('..')
-import mmfreelm
 import logging
 from utils import CustomThread
 curr_date=datetime.datetime.today().strftime('%m-%d-%Y')
@@ -67,8 +66,14 @@ args = parser.parse_args()
 
 memory_metrics = [
     "dram__bytes.sum", 
+    "dram__bytes.avg", 
     "dram__throughput.sum.pct_of_peak_sustained_elapsed", # throughput as a percentage
     "dram__bytes.sum.per_second"  
+    "dram__bytes_read.sum", 
+    "dram__bytes_read.avg", 
+    "dram__bytes_write.sum", 
+    "dram__bytes_write.avg", 
+
 ]
 
 time_metrics = [
@@ -161,30 +166,22 @@ half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.
 tensor_core_metrics += [
     "smsp__inst_executed_pipe_tensor.sum",
     "smsp__inst_executed_pipe_tensor_op_imma.sum",                      
-    "smsp__ops_path_tensor_src_bf16_dst_fp32.sum",                                                             
-    "smsp__ops_path_tensor_src_bf16_dst_fp32_sparsity_off.sum",                                            
-    "smsp__ops_path_tensor_src_bf16_dst_fp32_sparsity_on.sum",                                                
-    "smsp__ops_path_tensor_src_fp16_dst_fp16.sum",                                                          
-    "smsp__ops_path_tensor_src_fp16_dst_fp16_sparsity_off.sum",                                             
-    "smsp__ops_path_tensor_src_fp16_dst_fp16_sparsity_on.sum",                                             
-    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",                                                        
-    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum",
-    "smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_on.sum",                                                     
+    "smsp__ops_path_tensor_src_bf16_dst_fp32.sum",                                                                                                          
+    "smsp__ops_path_tensor_src_fp16_dst_fp16.sum",                                                                                                      
+    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",                                                                                                             
     "smsp__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
-    "smsp__ops_path_tensor_src_tf32_dst_fp32_sparsity_off.sum",
-    "smsp__ops_path_tensor_src_tf32_dst_fp32_sparsity_on.sum", 
     
     "smsp__inst_executed_pipe_tensor_op_hmma.sum", # half precision matrix multiply count
     "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",  # math ops count
-    "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed", 
-    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_cycle_elapsed", 
+    "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second", 
+    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second", 
     
     # 6000 specific metrics 
-    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed",
+    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_second",
     "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
 ]
        
-metrics_string = ",".join(memory_metrics + 
+metrics_string = ",".join(memory_metrics +
         double_precision_metrics + 
         single_precision_metrics + 
         half_precision_metrics +
@@ -198,8 +195,13 @@ ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
 logger.debug(f"Extracted ncu path: {ncu_path}")
 os.chdir('../')
 
-def run_ncu_profile(bs, new_tokens, seq_len):
-    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    model_name = model_name.replace("/", "-")
+    return  os.getcwd() + "/outputs/ncu_runs/autoProfilerFor" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    
+
+def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
     benchmark_command = [
         ncu_path, "--nvtx",
         # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
@@ -219,42 +221,13 @@ def run_ncu_profile(bs, new_tokens, seq_len):
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),
-        "-i", "1"
+        "-i", "1", 
+        "--model_name", model_name
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
     subprocess.run(benchmark_command, check=True)
     
-def extract_data_from_ncu_files(bs, new_tokens, seq_len):
-    logger.info("extracting data")
-    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
-    extract_data_command = [
-        ncu_path, 
-        "--import", report_name + ".ncu-rep",  
-        "--page", "raw",
-        "--metrics", metrics_string
-    ]
-
-    logger.debug(f"running command {' '.join(extract_data_command)}")
-    data = subprocess.check_output(extract_data_command).decode('ascii')
-    logger.debug(f"data extracted: {data[:100000]}")
-    logger.debug("data extracted now parsing data")
-    data = data.splitlines()
-    results = {}
-    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us = parse_data_from_ncu_files(data)
-    results["KiloBytes Accessed"] = total_kilo_bytes
-    results["Double Precision FLOPs"] = double_precision_count
-    results["Single Precision FLOPs"] = single_precision_count
-    results["Half Precision FLOPs"] = half_precision_count
-    results["Tensor FLOPs"] = tensor_count
-    results["Run Time (s)"] = run_time_us / 1e6
-    results["(NCU) Total FLOPs"] = double_precision_count + single_precision_count + half_precision_count + tensor_count
-    results['Model Name'] = 'ridger/MMfreeLM-2.7B'
-    results['Batch Size'] = bs
-    results['Tokens Generated'] = new_tokens 
-    results['Input Sequence Length'] = seq_len
-    logger.info(f"row generated: {results}")
-    return results
 def flatten_kernels(df, bs, new_tokens, seq_len):
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
@@ -297,19 +270,17 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
 
 
     df_flat.columns.name = None
-    double_precision_flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
-             df_flat["sm__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
-    single_precision_flops =(df_flat["sm__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
+    double_precision_flops = (df_flat["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+             df_flat["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
+             df_flat["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
+    single_precision_flops =(df_flat["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+             df_flat["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
+             df_flat["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
     half_precision_flops = (
-             df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
-    # tensor_flops= (
-    #     df_flat["smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum (nan)"]
-    # )
+             df_flat["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
+             df_flat["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
+             df_flat["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
+    
 
     df_flat["Single Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
                     df_flat['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
@@ -324,42 +295,44 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
                 (df_flat['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
         ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
 
-    tensor_flop_rate= None 
-    if "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed" in df_flat: 
-        tensor_flop_rate = "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_cycle_elapsed"
-    elif "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed" in df_flat:
-        tensor_flop_rate = "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_cycle_elapsed"
-    
-    tensor_flop_count = None 
-    if "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum" in df_flat: 
-        tensor_flop_count = "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
-    elif "smsp__inst_executed_pipe_tensor_op_hmma.sum" in df_flat:
-        tensor_flop_count = "smsp__inst_executed_pipe_tensor_op_hmma.sum"
-    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Billion Inst/s)"] = ((df_flat[tensor_flop_rate]) 
-        * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    
-    df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = ((df_flat['smsp__ops_path_tensor_src_fp16_dst_fp32_sparsity_off.sum.per_cycle_elapsed (nan)']) 
-        * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
+    tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 
+    tensor_flop_rate =  "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
+
+    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df_flat[tensor_inst_rate]/1e-9
+    tensor_flops = df_flat[tensor_flop_count]
+    df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df_flat[tensor_flop_rate] / 1e9
 
     df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    # df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
+    df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
     return df_flat
 
 def extract_flops(df): 
-    # Multiply Accumulate is two instructions so we cound all of them a second time
-    double_precision_count = (df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_dfma_pred_on.sum"]["Metric Value"].astype(float).sum())
-    single_precision_count = (df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]["Metric Value"].astype(float).sum())
-    half_precision_count = (df[df["Metric Name"].isin(half_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]["Metric Value"].astype(float).sum())
-    
-    tensor_count = df[df["Metric Name"].isin(tensor_core_metrics)]["Metric Value"].astype(float).sum()
+    double_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+        df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
+        df["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"]
+    )
+    single_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+        df["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
+        df["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"]
+    )
 
-    return double_precision_count, single_precision_count, half_precision_count, tensor_count
+    half_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
+        df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
+        df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
+    )
+
+    tensor_count = df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"] 
+    
+    return double_precision_flops, single_precision_flops, half_precision_flops, tensor_count
+
+
 def extract_dram_usage(df):
     total_kilo_bytes = 0
     total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
@@ -414,9 +387,9 @@ def get_metrics_from_data_frame(df):
     results["Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["Gigabytes Accessed"]
     return results
 
-def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
+def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     logger.info("attempting to extract data using a csv")
-    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
     csv_name = report_name +".csv"
     extract_data_command = [
         ncu_path, 
@@ -429,6 +402,11 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
         subprocess.run(extract_data_command, check=True, stdout=f)
     df = pd.read_csv(csv_name)
     df = df.replace(',','', regex=True)
+    return df
+
+def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
+    df = flatten_kernels(first_pair, bs, new_tokens, seq_len)
 
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -458,7 +436,6 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
 
 def extract_additional_workload_data(df, workload_str):
-    # fraction of 16, 32, adn 64 bit floating point operations 
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
     flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
     run_time_us = extract_run_time(df)
@@ -540,7 +517,7 @@ def log_full_df(df):
 def main():
     logger.info("Extracting Roofline Data")
     from datetime import datetime
-    filename =  'outputs/csvs/roofline_data.csv'
+    filename = f'outputs/csvs/roofline_data{curr_date}.csv'
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
     min_batch_power = int(args.min_batch_power)
@@ -552,7 +529,7 @@ def main():
         for batch_power in range(min_batch_power, max_batch_power+1):
             batch_size = 2**batch_power
             run_ncu_profile(batch_size, max_new_tokens, sequence_length)
-            thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))
+            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length))
             threads.append(thread)
             thread.start()
         for thread in threads:

@@ -195,23 +195,27 @@ def main():
     # df["Half Preciscion Instruction Count"] = 
     # check to see if 
     # 2. Plot the required metrics
-    plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
-    plot_metric(df, "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)")
-    plot_metric(df, "Compute Intensity")
-    plot_metric(df, "fraction of active cycles")
-    plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
-    # plot_metric(df, "Single Precision GFLOP/s")
-    plot_metric(df, "Half Precision GFLOP/s")
-    plot_metric(df, "Double Precision GFLOP/s")
+    # plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
+    # plot_metric(df, "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)")
+    # # plot_metric(df, "Compute Intensity")
+    # plot_metric(df, "fraction of active cycles")
+    # plot_metric(df, "dram__throughput.sum.pct_of_peak_sustained_elapsed (%)")
+    # # plot_metric(df, "Single Precision GFLOP/s")
+    # plot_metric(df, "Half Precision GFLOP/s")
+    # plot_metric(df, "Double Precision GFLOP/s")
     plot_multi_metric(df, [
         "Single Precision GFLOP/s", 
         "Half Precision GFLOP/s", 
-        "Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"], "GFLOP Per Second", "~GFLOPs Per Second")
+        "Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"], "GFLOP Per Second", "All GFLOPs Per Second")
+    plot_multi_metric(df, [
+        "Single Precision GFLOP/s", 
+        "Half Precision GFLOP/s"], 
+        "GFLOP Per Second", "Excluding Tensor Cores FLOPs Per Second")
     
     plot_multi_metric(df, ["Single Precision GFLOP/s"], "Single Precision GFLOP Per Second", "Single Precision GFLOPs Per Second")
     plot_multi_metric(df, ["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"], "Tensor Math Operations (Billion Per Second)", "Tensor Math Operations over Time")
-    plot_multi_metric(df, ["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"], "Tensor Math Operations (Billion Per Second)", "Tensor Math Operations over Time")
-    plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.avg.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
+    plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.sum.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
+    plot_multi_metric(df, ["(Single Precision) Compute Intensity", "(Half Precision) Compute Intensity", "(Tensor Cores) Compute Intensity"], "Compute Intensity", "Compute Intensity Over Time")
     plot_multi_metric_stacked_bar_chart(df, "stall count", "Stall Count")
     
     

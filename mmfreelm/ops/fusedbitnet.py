@@ -468,11 +468,16 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             y = y.reshape(x_shape_og)
             dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
             # linear_weight = weight_quant(linear_weight).to(dtype)
+            
             with nvtx.annotate("dataTypeConversion", color="red"):
                 linear_weight = linear_weight.to(dtype)
             linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
+            y = y.to(linear_weight.dtype)
+            # print(y.size())
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
-                out = F.linear(y.to(linear_weight.dtype), linear_weight, linear_bias)
+                out = F.linear(y, linear_weight, linear_bias)
+            #print(out.size())
+            # print(f"output: {out.size()}")
             # We don't store y, will be recomputed in the backward pass to save memory
             ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
             ctx.x_shape_og = x_shape_og

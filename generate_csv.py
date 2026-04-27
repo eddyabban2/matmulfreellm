@@ -305,15 +305,11 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         for model_name in models:
             row = {'device': device, 'model': model_name}
-            if args.use_original:
-                row['model'] += " Original"
-            else:
-                row['model'] += " Newer"
             print(f"Collecting data for model: {model_name}")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
@@ -329,11 +325,11 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
 
                 # profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
 
-                # print(f"\t\tCollecting time to first token data...")
-                # start_time = time.time()
-                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
-                # end_time = time.time()
-                # print(f"\t\t\tTTTFL completed in {end_time-start_time} sec")
+                print(f"\t\tCollecting time to first token data...")
+                start_time = time.time()
+                row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
+                end_time = time.time()
+                print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
 
                 # print("\t\t Collecting Power data")
                 # start_time = time.time()
