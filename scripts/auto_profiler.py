@@ -7,14 +7,10 @@ import sys
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
-import torch
-from torch.profiler import profile, record_function, ProfilerActivity, schedule
-from torch.utils.flop_counter import FlopCounterMode
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-import transformers
 import csv
 import pandas as pd
 import datetime
+import metrics_helper
 
 from pathlib import Path
 sys.path.append('..')
@@ -38,6 +34,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "-m",
+    "--model_name",
+    default="ridger/MMfreeLM-2.7B",
+    help="sets the model name"
+)
+
+
+parser.add_argument(
     "--max_new_tokens",
     default="1",
     help="sets the number of new tokens to be generated"
@@ -55,147 +59,22 @@ parser.add_argument(
     help="sets the minimum batch power"
 )
 parser.add_argument(
-    '-t',
-    '--test',
-    default=False,
-    action='store_true'    
-)
+    '--metrics', 
+    choices=['all', 'jetson'],
+    default="all")
 
 
 args = parser.parse_args()
 
-memory_metrics = [
-    "dram__bytes.sum", 
-    "dram__bytes.avg", 
-    "dram__throughput.sum.pct_of_peak_sustained_elapsed", # throughput as a percentage
-    "dram__bytes.sum.per_second"  
-    "dram__bytes_read.sum", 
-    "dram__bytes_read.avg", 
-    "dram__bytes_write.sum", 
-    "dram__bytes_write.avg", 
-
-]
-
-time_metrics = [
-    "gpu__time_duration.sum", 
-    "gpu__time_duration", 
-    "gpu__time_duration.sum" 
-]
-# https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-reference
-stall_metrics = [
-    "smsp__pcsamp_warps_issue_stalled_barrier", # barrier stall
-    "smsp__pcsamp_warps_issue_stalled_branch_resolving", # branch stall
-    "smsp__pcsamp_warps_issue_stalled_dispatch_stall", # dispatch stall 
-    "smsp__pcsamp_warps_issue_stalled_drain", # deallocation of memory resources
-    # "smsp__pcsamp_warps_issue_stalled_imc_miss", # imc miss (does not apear in our workload?)
-    "smsp__pcsamp_warps_issue_stalled_lg_throttle", # l1 instruction cache stall 
-    "smsp__pcsamp_warps_issue_stalled_long_scoreboard", # scoreboard stall?
-    "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle", # mat pipeline stall
-    "smsp__pcsamp_warps_issue_stalled_membar", # memory barrier
-    "smsp__pcsamp_warps_issue_stalled_mio_throttle", # memory input and output stall 
-    "smsp__pcsamp_warps_issue_stalled_misc", # misc hardware stall
-    "smsp__pcsamp_warps_issue_stalled_no_instructions", # no instructions issued 
-    "smsp__pcsamp_warps_issue_stalled_not_selected", # waiting to be selected 
-    "smsp__pcsamp_warps_issue_stalled_selected", # instruction issued?
-    "smsp__pcsamp_warps_issue_stalled_short_scoreboard", # score board?
-    "smsp__pcsamp_warps_issue_stalled_sleeping", # all threads are sleeping
-    "smsp__pcsamp_warps_issue_stalled_tex_throttle", # tex stall?
-    "smsp__pcsamp_warps_issue_stalled_wait", # fixed latency stall?
-    "smsp__pcsamp_warps_issue_stalled_warpgroup_arrive" # war group wait
-]
-usage_metrics = [
-    "sm__cycles_elapsed.avg", # count of all cycles across SMs 
-    "sm__cycles_active.avg", # avg active cycles across SMs
-    "sm__cycles_elapsed.sum", # count of all cycles across SMs 
-    "sm__cycles_active.sum", # avg active cycles across SMs
-    
-    "smsp__cycles_active.sum",
-    "smsp__cycles_active.avg",
-    "smsp__cycles_elapsed.sum",
-    "smsp__cycles_elapsed.avg",
-    "smsp__cycles_elapsed.avg.per_second",
-    
-    "sm__cycles_active.sum.pct_of_peak_sustained_elapsed", # count of active cycles across all SMs
-    "sm__cycles_active.avg.pct_of_peak_sustained_elapsed", # avg active cycles across SMs
-
-    "sm__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-    "sm__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-
-    "smsp__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-    "smsp__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-
-    "smsp__throughput.sum.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-    "smsp__throughput.avg.pct_of_peak_sustained_elapsed", # peak throughoutput percentage
-
-    "sm__warps_active.avg", 
-    "sm__warps_active.avg"
-]
-
-double_precision_metrics = [ "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
-single_precision_metrics = ["sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]
-half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
-tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
-        "sm__ops_path_tensor_op_imma_pred_on.sum"]
-
-double_precision_metrics += [ "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
-single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum"]
-half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum",
-       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum"]
-tensor_core_metrics += ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
-       "smsp__ops_path_tensor_op_imma_pred_on.sum"]
-
-double_precision_metrics += ["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed" ]
-single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed" ]
-half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed"]
-
-tensor_core_metrics += [
-    "smsp__inst_executed_pipe_tensor.sum",
-    "smsp__inst_executed_pipe_tensor_op_imma.sum",                      
-    "smsp__ops_path_tensor_src_bf16_dst_fp32.sum",                                                                                                          
-    "smsp__ops_path_tensor_src_fp16_dst_fp16.sum",                                                                                                      
-    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",                                                                                                             
-    "smsp__ops_path_tensor_src_tf32_dst_fp32.sum",                                                         
-    
-    "smsp__inst_executed_pipe_tensor_op_hmma.sum", # half precision matrix multiply count
-    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",  # math ops count
-    "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second", 
-    "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second", 
-    
-    # 6000 specific metrics 
-    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_second",
-    "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
-]
-       
-metrics_string = ",".join(memory_metrics +
-        double_precision_metrics + 
-        single_precision_metrics + 
-        half_precision_metrics +
-        tensor_core_metrics+ 
-        time_metrics + 
-        stall_metrics + 
-        usage_metrics)
-
-
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
 logger.debug(f"Extracted ncu path: {ncu_path}")
 os.chdir('../')
+
+metrics_string = None
+if(args.metrics == "all"):
+    metrics_string = metrics_helper.all_metrics()
+elif(args.metrics == "jetson"):
+    metrics_string = metrics_helper.jetson_metrics()
 
 def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     model_name = model_name.replace("/", "-")
@@ -228,7 +107,7 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df, bs, new_tokens, seq_len):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -408,7 +287,7 @@ def estimate_fraction_of_memory_from_wegiths(bs, new_tokens, seq_len):
 
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
-    df = flatten_kernels(first_pair, bs, new_tokens, seq_len)
+    df = flatten_kernels(df, bs, new_tokens, seq_len)
 
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -523,14 +402,15 @@ def main():
     max_new_tokens = int(args.max_new_tokens)
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
+    model_name = args.model_name
     first_row = True
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
         for batch_power in range(min_batch_power, max_batch_power+1):
             batch_size = 2**batch_power
-            run_ncu_profile(batch_size, max_new_tokens, sequence_length)
-            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length))
+            run_ncu_profile(batch_size, max_new_tokens, sequence_length, model_name=model_name)
+            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length, model_name))
             threads.append(thread)
             thread.start()
         for thread in threads:
