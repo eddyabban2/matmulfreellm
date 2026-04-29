@@ -108,9 +108,38 @@ blackwell_tensor = [
 
 jetson_memory = [
     "lts__t_sectors_aperture_device_lookup_miss.sum", 
-    "lts__t_sectors_aperture_sysmem_lookup_miss.sum"
+    "lts__t_sectors_aperture_sysmem_lookup_miss.sum", 
+    "lts__t_sectors_aperture_peer_lookup_miss.sum",
+    "lts__t_sectors.sum", 
+    "lts__t_tag_requests_miss.sum", 
+    "lts__d_sectors_fill_device.sum", 
+    "lts__d_sectors_fill_sysmem.sum", 
+    "lts__t_sectors_aperture_device_op_write_lookup_miss.sum", 
+    "lts__t_sectors_aperture_sysmem_op_write_lookup_miss.sum",
+    "lts__t_sectors_aperture_peer_op_write_lookup_miss.sum" 
 ]
 
+jetson_stall = [ 
+    "smsp__average_warp_latency_issue_stalled_barrier.sum", 
+    "smsp__average_warp_latency_issue_stalled_branch_resolving.sum", 
+    "smsp__average_warp_latency_issue_stalled_drain.sum", 
+    "smsp__average_warp_latency_issue_stalled_imc_miss.sum", 
+    "smsp__average_warp_latency_issue_stalled_lg_throttle.sum", 
+    "smsp__average_warp_latency_issue_stalled_long_scoreboard.sum", 
+    "smsp__average_warp_latency_issue_stalled_long_scoreboard_pipe_l1tex.sum",
+    "smsp__average_warp_latency_issue_stalled_math_pipe_throttle.sum", 
+    "smsp__average_warp_latency_issue_stalled_membar.sum", 
+    "smsp__average_warp_latency_issue_stalled_mio_throttle.sum", 
+    "smsp__average_warp_latency_issue_stalled_mio_throttle_pipe_mio.sum", 
+    "smsp__average_warp_latency_issue_stalled_misc.sum", 
+    "smsp__average_warp_latency_issue_stalled_no_instruction.sum", 
+    "smsp__average_warp_latency_issue_stalled_not_selected.sum",
+    "smsp__average_warp_latency_issue_stalled_selected.sum", 
+    "smsp__average_warp_latency_issue_stalled_short_scoreboard.sum", 
+    "smsp__average_warp_latency_issue_stalled_sleeping.sum", 
+    "smsp__average_warp_latency_issue_stalled_tex_throttle.sum", 
+    "smsp__average_warp_latency_issue_stalled_wait.sum"
+]
 
 def all_metrics():
     return ",".join(memory_metrics +
@@ -130,7 +159,8 @@ def jetson_metrics():
        single_precision_metrics + 
        half_precision_metrics +
        tensor_core_metrics + 
-       usage_metrics
+       usage_metrics + 
+       jetson_stall
     )
 
 

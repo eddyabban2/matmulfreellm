@@ -107,7 +107,7 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df, bs, new_tokens, seq_len):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -186,7 +186,7 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df_flat[tensor_inst_rate]/1e-9
     tensor_flops = df_flat[tensor_flop_count]
     df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df_flat[tensor_flop_rate] / 1e9
-    
+
     df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
