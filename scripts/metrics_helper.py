@@ -143,14 +143,15 @@ jetson_stall = [
 
 def all_metrics():
     return ",".join(memory_metrics +
-        double_precision_metrics + 
-        single_precision_metrics + 
-        half_precision_metrics +
-        tensor_core_metrics +
-        blackwell_tensor +  
-        time_metrics + 
-        stall_metrics + 
-        usage_metrics)
+        # double_precision_metrics + 
+        # single_precision_metrics + 
+        # half_precision_metrics +
+        # tensor_core_metrics +
+        # blackwell_tensor +  
+        # time_metrics + 
+        # stall_metrics + 
+        # usage_metrics + 
+        jetson_memory)
 
 def jetson_metrics():
     return ",".join(

@@ -107,9 +107,9 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
-def flatten_kernels(df, bs, new_tokens, seq_len):
+def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
         "byte": 1e-3,
@@ -150,49 +150,61 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     
     logger.info(list(df_flat.columns.values))
 
-
     df_flat.columns.name = None
-    double_precision_flops = (df_flat["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
-             df_flat["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
-             df_flat["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
-    single_precision_flops =(df_flat["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
-             df_flat["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
-             df_flat["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
+    return df_flat
+
+def add_additional_columns(df, bs, new_tokens, seq_len):
+
+    dram_estimation = (df["lts__d_sectors_fill_device.sum (sector)"]*32 + df["lts__d_sectors_fill_sysmem.sum (sector)"]*32) / 1000
+    if "dram__bytes.sum (Kbyte)" not in df:
+        df["dram__bytes.sum (Kbyte)"] = dram_estimation
+    else: 
+        df["estimated dram__bytes.sum (Kbyte)"] = dram_estimation
+        df["accuracy of dram_bytes estimation (%)"] = df["estimated dram__bytes.sum (Kbyte)"] / df["dram__bytes.sum (Kbyte)"]
+        logger.info(f"description of dram bytes estimation accuracy {df["accuracy of dram_bytes estimation (%)"].describe()}")
+
+    double_precision_flops = (df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+             df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
+    single_precision_flops =(df["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
     half_precision_flops = (
-             df_flat["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
-             df_flat["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
-             df_flat["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
+             df["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
+
     
 
-    df_flat["Single Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                    df_flat['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                    (df_flat['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-            ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    df_flat["Half Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                df_flat['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                (df_flat['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-        ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    df_flat["Double Precision GFLOP/s"] = ((df_flat['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                df_flat['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                (df_flat['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-        ) * df_flat['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df["Single Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                    df['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                    (df['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+            ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df["Half Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                df['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                (df['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+        ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df["Double Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                df['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
+                (df['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
+        ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
 
     tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
     tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 
     tensor_flop_rate =  "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
-    if tensor_flop_rate not in df_flat: 
+    if tensor_flop_rate not in df: 
         tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/s)'
 
-    df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df_flat[tensor_inst_rate]/1e-9
-    tensor_flops = df_flat[tensor_flop_count]
-    df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df_flat[tensor_flop_rate] / 1e9
+    df["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df[tensor_inst_rate]/1e-9
+    tensor_flops = df[tensor_flop_count]
+    df["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df[tensor_flop_rate] / 1e9
 
-    df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat["(Tensor Cores) Compute Intensity"] = tensor_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
-    return df_flat
+    df["(Double Precision) Compute Intensity"] = double_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Single Precision) Compute Intensity"] = single_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Half Precision) Compute Intensity"] = half_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Tensor Cores) Compute Intensity"] = tensor_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
+    return df
 
 def extract_flops(df): 
     double_precision_flops = (
@@ -290,8 +302,10 @@ def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
     df.head(n=10000).to_csv(f"outputs/csvs/unflattened_kernels-{curr_date}.csv")
-    df = flatten_kernels(df, bs, new_tokens, seq_len)
+    df = flatten_kernels(df)
     df.head(n=10000).to_csv(f"outputs/csvs/flattened_kernels-{curr_date}.csv")
+    df = add_additional_columns(df, bs, new_tokens, seq_len)
+    df.head(n=10000).to_csv(f"outputs/csvs/flattened_kernelswith_metrics-{curr_date}.csv")
     fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
