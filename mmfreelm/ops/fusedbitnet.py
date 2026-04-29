@@ -473,20 +473,19 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
                 linear_weight = linear_weight.to(dtype)
             linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
             y = y.to(linear_weight.dtype)
-            # print(y.size())
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
                 out = F.linear(y, linear_weight, linear_bias)
             #print(out.size())
             # print(f"output: {out.size()}")
             # We don't store y, will be recomputed in the backward pass to save memory
-            ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
-            ctx.x_shape_og = x_shape_og
-            ctx.eps = eps
-            ctx.is_rms_norm = is_rms_norm
-            ctx.has_residual = residual is not None
-            ctx.prenorm = prenorm
-            ctx.x_dtype = x.dtype
-            ctx.linear_bias_is_none = linear_bias is None
+            # ctx.save_for_backward(residual_out, norm_weight, norm_bias, linear_weight, mean, rstd)
+            # ctx.x_shape_og = x_shape_og
+            # ctx.eps = eps
+            # ctx.is_rms_norm = is_rms_norm
+            # ctx.has_residual = residual is not None
+            # ctx.prenorm = prenorm
+            # ctx.x_dtype = x.dtype
+            # ctx.linear_bias_is_none = linear_bias is None
             return out if not prenorm else (out, residual_out.reshape(x_shape_og))
 
     @staticmethod

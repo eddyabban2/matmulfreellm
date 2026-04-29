@@ -26,8 +26,6 @@ if len(sys.argv) > 1:
 
 # Axis limits
 xmin, xmax, ymin, ymax = 0.04, 10000, 0.4, 30000000
-# xmin, xmax, ymin, ymax = 0.04, 20, 4, 2000
-#xmin, xmax, ymin, ymax = 0.001, 10, 0.001, 1000
 
 # Figure
 fig_ratio = 2
@@ -49,9 +47,10 @@ gpu_roofs = [
 #   {"name" : "Scalar Add Peak",    "val" : 98.48},
 #   {"name" : "DP Vector Add Peak", "val" : 843.06},
 #   {"name" : "DP Vector FMA Peak", "val" : 1691.96},
-  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
+  # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
   {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" : 1000000},
-  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
+  # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
+  {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
 ]
 
 # Memory in Giga Bytes Per Second
@@ -60,15 +59,21 @@ mem_bottlenecks = [
     # {"name" : "L2 Bandwidth",     "val" : 1237.34},
     # {"name" : "MCDRAM Bandwidth", "val" : 393.75},
     {"name" : "Nvidia 6000",    "val" : 1790},
-    {"name" : "HBM2e (H100)",    "val" : 3350}
+    {"name" : "HBM2e (H100)",    "val" : 3350}, 
+    {"name" : "RTX 3090ti",    "val" : 3350}
 ]
 
 # Benchmarks
 AI_v = {
   # "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1" : 6.882442748091603,
   # "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1" : 3.5191431943031537,
+  "Batch Size 1" : 94.19251092436974,
+  "(Effective) Batch Size 1" : 544.752911518972, 
+  "Batch Size 8": 355.0904576802508, 
+  "(Effective) Batch Size 8" : 883.144666691159, 
+  "Batch Size 1024": 360.18445040214476,
+  "(Effective) Batch Size 1024" : 365.486673150519
 
-  "(GEMM Kernels) Example 1" : 379.0990046434906
   # "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 0.1269359383082901,
 
   # "(Sigmoid Kernels) Batch Size 1, Sequence Length 161, New Tokens 1" : 5.414220545033318,
@@ -86,7 +91,12 @@ datapoints = [
   # {"AI" : "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1012.3228070175439,  "label"  : "Layer Norm Small Batch"},
   # {"AI" : "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 5020.780493468795,  "label"  : "Layer Norm Large Batch"},
 
-  {"AI" : "(GEMM Kernels) Example 1",        "GFLOP/s" : 73562.1975,  "label"  : "GEMM Small Batch"}
+  {"AI" : "Batch Size 1", "GFLOP/s" : 47043.54560716284,  "label"  : "Batch Size 1"}, 
+  {"AI" : "(Effective) Batch Size 1", "GFLOP/s" : 47043.54560716284,  "label"  : "(Effective) Batch Size 1"},
+  {"AI" : "Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "Batch Size 8"}, 
+  {"AI" : "(Effective) Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "(Effective) Batch Size 8"},
+  {"AI" : "Batch Size 1024", "GFLOP/s" : 74638.22222222223,  "label"  : "Batch Size 1024"}, 
+  {"AI" : "(Effective) Batch Size 1024", "GFLOP/s" : 74638.22222222223,  "label"  : "(Effective) Batch Size 1024"},
   # {"AI" : "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 62.066447058823535,  "label"  : "GEMM Large Batch"},
 
   # {"AI" : "(Sigmoid Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1025.737556561086,  "label"  : "Sigmoid Small Batch"},
@@ -195,7 +205,6 @@ for roof in gpu_roofs:
     fontsize=11,
     color="grey")
 
-print
 
 #plt.xticks(list(plt.xticks()[0]) + [AI for n,AI in AI_v.items()], list(plt.xticks()[0]) + [str(AI) for n,AI in AI_v.items()])
 for benchmark in AI_v:
@@ -233,9 +242,5 @@ plt.figlegend()
 plt.title("GEMM-Free LLM Roofline", fontsize=20)
 plt.tight_layout()
 set_size(fig_dimension*fig_ratio,fig_dimension)
-plt.savefig("roofline.png")
+plt.savefig("outputs/images/roofline.png")
 plt.show()
-
-pp = PdfPages(filename)
-pp.savefig(fig)
-pp.close()
