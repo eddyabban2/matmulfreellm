@@ -180,11 +180,13 @@ def flatten_kernels(df, bs, new_tokens, seq_len):
     tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
     tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 
     tensor_flop_rate =  "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
+    if tensor_flop_rate not in df_flat: 
+        tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/s)'
 
     df_flat["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df_flat[tensor_inst_rate]/1e-9
     tensor_flops = df_flat[tensor_flop_count]
     df_flat["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df_flat[tensor_flop_rate] / 1e9
-
+    
     df_flat["(Double Precision) Compute Intensity"] = double_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Single Precision) Compute Intensity"] = single_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
     df_flat["(Half Precision) Compute Intensity"] = half_precision_flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
@@ -279,7 +281,7 @@ def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name
     return df
 
 
-def estimate_fraction_of_memory_from_wegiths(bs, new_tokens, seq_len):
+def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
     weight_floats = (2560*2560*4 + 13824*2560 + 2560*6912)*32 + 32000*2560
     activation_floats = (2560*bs*seq_len*5 + 6912*bs*seq_len)*32 + (bs*seq_len*2560)
     output_floats = (2560*bs*seq_len*5 + 13824*bs*seq_len)*32 + (bs*seq_len*32000)
@@ -287,8 +289,10 @@ def estimate_fraction_of_memory_from_wegiths(bs, new_tokens, seq_len):
 
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
+    df.head(n=10000).to_csv(f"outputs/csvs/unflattened_kernels-{curr_date}.csv")
     df = flatten_kernels(df, bs, new_tokens, seq_len)
-
+    df.head(n=10000).to_csv(f"outputs/csvs/flattened_kernels-{curr_date}.csv")
+    fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
     full_workload_row = get_metrics_from_data_frame(df)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])

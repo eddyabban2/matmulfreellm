@@ -64,28 +64,17 @@ usage_metrics = [
     "sm__warps_active.avg"
 ]
 
-double_precision_metrics = [ "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
-single_precision_metrics = ["sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]
-half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
-tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
-        "sm__ops_path_tensor_op_imma_pred_on.sum"]
 
-double_precision_metrics += [ "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum",
+double_precision_metrics = [ "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
-single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
+single_precision_metrics = ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum"]
-half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum",
+half_precision_metrics = ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum",
        "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum"]
-tensor_core_metrics += ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
+tensor_core_metrics = ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
        "smsp__ops_path_tensor_op_imma_pred_on.sum"]
 
 double_precision_metrics += ["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
@@ -110,31 +99,38 @@ tensor_core_metrics += [
     "smsp__ops_path_tensor_src_fp16_dst_fp32.sum",  # math ops count
     "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second", 
     "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second", 
-    
-    # 6000 specific metrics 
+]
+
+blackwell_tensor = [
     "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum.per_second",
     "smsp__inst_executed_pipe_tensor_subpipe_hmma.sum"
 ]
 
 jetson_memory = [
-    "lts__t_sectors_aperture_device_lookup_miss", 
-    "lts__t_sectors_aperture_sysmem_lookup_miss"
-
+    "lts__t_sectors_aperture_device_lookup_miss.sum", 
+    "lts__t_sectors_aperture_sysmem_lookup_miss.sum"
 ]
+
 
 def all_metrics():
     return ",".join(memory_metrics +
         double_precision_metrics + 
         single_precision_metrics + 
         half_precision_metrics +
-        tensor_core_metrics+ 
+        tensor_core_metrics +
+        blackwell_tensor +  
         time_metrics + 
         stall_metrics + 
         usage_metrics)
 
 def jetson_metrics():
     return ",".join(
-       jetson_memory
+       jetson_memory + 
+       double_precision_metrics + 
+       single_precision_metrics + 
+       half_precision_metrics +
+       tensor_core_metrics + 
+       usage_metrics
     )
 
 
