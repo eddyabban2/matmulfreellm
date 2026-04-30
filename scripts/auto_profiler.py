@@ -107,7 +107,7 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -121,6 +121,8 @@ def flatten_kernels(df):
         "s":    1e6,
         "ns":   1e-3,
         "inst": 1,
+        "1/ns" : 1, 
+        "1/s": 1e-9
     }
 
     # Canonical names for the base units
@@ -128,6 +130,7 @@ def flatten_kernels(df):
         "byte": "Kbyte", "Kbyte": "Kbyte", "Mbyte": "Kbyte", "Gbyte": "Kbyte",
         "us": "us", "ms": "us", "ns": "us", "s": "us",
         "inst": "inst",
+        "1/ns": "1/ns", "1/s": "1/ns",
     }
 
     df["Metric Value"] = df["Metric Value"].astype(float)
@@ -161,7 +164,8 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
     else: 
         df["estimated dram__bytes.sum (Kbyte)"] = dram_estimation
         df["accuracy of dram_bytes estimation (%)"] = df["estimated dram__bytes.sum (Kbyte)"] / df["dram__bytes.sum (Kbyte)"]
-        logger.info(f"description of dram bytes estimation accuracy {df["accuracy of dram_bytes estimation (%)"].describe()}")
+        logger.info("description of dram bytes estimation accuracy")
+        logger.info(df["accuracy of dram_bytes estimation (%)"].describe())
 
     double_precision_flops = (df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
              df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
@@ -173,8 +177,6 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
              df["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
              df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
              df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
-
-    
 
     df["Single Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
                     df['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
@@ -191,13 +193,17 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
 
     tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
     tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 
-    tensor_flop_rate =  "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
-    if tensor_flop_rate not in df: 
-        tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/s)'
+    tensor_flop_correction_factor = 1 
+    tensor_flop_rate = None 
+    if "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)" in df: 
+        tensor_flop_rate = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
+        tensor_flop_correction_factor = 1e9 
+    elif 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/ns)' in df: 
+        tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/ns)'
 
     df["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df[tensor_inst_rate]/1e-9
     tensor_flops = df[tensor_flop_count]
-    df["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df[tensor_flop_rate] / 1e9
+    df["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df[tensor_flop_rate] / tensor_flop_correction_factor
 
     df["(Double Precision) Compute Intensity"] = double_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
     df["(Single Precision) Compute Intensity"] = single_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
@@ -230,17 +236,9 @@ def extract_flops(df):
 
 
 def extract_dram_usage(df):
-    # total_kilo_bytes = 0
-    # total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
-    # total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Mbyte")]["Metric Value"].astype(float).sum() * 1e3
-    # total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
     return df["dram__bytes.sum (Kbyte)"].sum()
 
 def extract_run_time(df):
-    # run_time_us = 0 
-    # run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
-    # run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
-    # run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
     return df["gpu__time_duration.sum (us)"].sum()
 
 def get_metrics_from_data_frame(df, fraction_of_memory_from_weights):
@@ -300,14 +298,14 @@ def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
     return weight_floats/(weight_floats+ activation_floats + output_floats)
 
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    workload_string = f"{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}"
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
-    df.head(n=10000).to_csv(f"outputs/csvs/unflattened_kernels-{curr_date}.csv")
+    df.head(n=10000).to_csv(f"outputs/csvs/unflattened_kernels-{workload_string}.csv")
     df = flatten_kernels(df)
-    df.head(n=10000).to_csv(f"outputs/csvs/flattened_kernels-{curr_date}.csv")
     df = add_additional_columns(df, bs, new_tokens, seq_len)
-    df.head(n=10000).to_csv(f"outputs/csvs/flattened_kernelswith_metrics-{curr_date}.csv")
+    df.head(n=10000).to_csv(f"outputs/csvs/flattened-kernels-with_metrics-{workload_string}.csv")
     fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
-    full_workload_row = get_metrics_from_data_frame(df)
+    full_workload_row = get_metrics_from_data_frame(df, fraction_of_memory_from_weights)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])
 
@@ -328,7 +326,7 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
-    first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{curr_date}.csv")
+    first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
 
     logger.info(f"full workload row generated: {full_workload_row}")
     return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]

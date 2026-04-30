@@ -77,15 +77,15 @@ half_precision_metrics = ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum",
 tensor_core_metrics = ["smsp__ops_path_tensor_op_hmma_pred_on.sum",
        "smsp__ops_path_tensor_op_imma_pred_on.sum"]
 
-double_precision_metrics += ["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed" ]
-single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed" ]
-half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed",
-       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed"]
+double_precision_metrics += ["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_second" ]
+single_precision_metrics += ["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_second" ]
+half_precision_metrics += ["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_second",
+       "smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_second"]
 
 tensor_core_metrics += [
     "smsp__inst_executed_pipe_tensor.sum",
@@ -143,22 +143,24 @@ jetson_stall = [
 
 def all_metrics():
     return ",".join(memory_metrics +
-        # double_precision_metrics + 
-        # single_precision_metrics + 
-        # half_precision_metrics +
-        # tensor_core_metrics +
-        # blackwell_tensor +  
-        # time_metrics + 
-        # stall_metrics + 
-        # usage_metrics + 
+        double_precision_metrics + 
+        single_precision_metrics + 
+        half_precision_metrics +
+        tensor_core_metrics +
+        blackwell_tensor +  
+        time_metrics + 
+        stall_metrics + 
+        usage_metrics + 
         jetson_memory)
 
+# python auto_profiler.py -s 100 --max_new_tokens 1 --model_name ridger/MMfreeLM-370M --metrics jetson                                                                                                                                              
 def jetson_metrics():
     return ",".join(
        jetson_memory + 
        double_precision_metrics + 
        single_precision_metrics + 
        half_precision_metrics +
+       time_metrics + 
        tensor_core_metrics + 
        usage_metrics + 
        jetson_stall

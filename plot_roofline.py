@@ -43,14 +43,16 @@ ax.set_ylabel("Performance [GFLOP/s]", fontsize=15)
 # Architecture-specific roofs
 # Source: https://www.advancedclustering.com/wp-content/uploads/2022/03/gtc22-whitepaper-hopper.pdf#%5B%7B%22num%22%3A49%2C%22gen%22%3A0%7D%2C%7B%22name%22%3A%22XYZ%22%7D%2C70%2C450%2C0%5D
 # https://resources.nvidia.com/en-us-hopper-architecture/nvidia-tensor-core-gpu-datasheet
+# https://developer.nvidia.com/blog/nvidia-jetpack-6-2-brings-super-mode-to-nvidia-jetson-orin-nano-and-jetson-orin-nx-modules/#:~:text=Table_title:%20New%20reference%20power%20modes%20on%20the,15W%20%7C%2025W%20%7C%20MAXN%20SUPER%E2%80%8B%20%7C
 gpu_roofs = [
 #   {"name" : "Scalar Add Peak",    "val" : 98.48},
 #   {"name" : "DP Vector Add Peak", "val" : 843.06},
 #   {"name" : "DP Vector FMA Peak", "val" : 1691.96},
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
-  {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" : 1000000},
+  # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" : 1000000},
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
-  {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
+  # {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
+  {"name" : "Jetson Nano Orin Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 17000},
 ]
 
 # Memory in Giga Bytes Per Second
@@ -58,21 +60,23 @@ mem_bottlenecks = [
     # {"name" : "L1 Bandwidth",     "val" : 7398.95},
     # {"name" : "L2 Bandwidth",     "val" : 1237.34},
     # {"name" : "MCDRAM Bandwidth", "val" : 393.75},
-    {"name" : "Nvidia 6000",    "val" : 1790},
-    {"name" : "HBM2e (H100)",    "val" : 3350}, 
-    {"name" : "RTX 3090ti",    "val" : 3350}
+    # {"name" : "Nvidia 6000",    "val" : 1790},
+    # {"name" : "HBM2e (H100)",    "val" : 3350}, 
+    # {"name" : "RTX 3090ti",    "val" : 3350}, 
+    {"name" : "Jetson Nano Orin",    "val" : 102}, 
+
 ]
 
 # Benchmarks
 AI_v = {
   # "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1" : 6.882442748091603,
   # "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1" : 3.5191431943031537,
-  "Batch Size 1" : 94.19251092436974,
-  "(Effective) Batch Size 1" : 544.752911518972, 
-  "Batch Size 8": 355.0904576802508, 
-  "(Effective) Batch Size 8" : 883.144666691159, 
-  "Batch Size 1024": 360.18445040214476,
-  "(Effective) Batch Size 1024" : 365.486673150519
+  "Batch Size 1" : 115.75123842640504,
+  # "(Effective) Batch Size 1" : 544.752911518972, 
+  # "Batch Size 8": 355.0904576802508, 
+  # "(Effective) Batch Size 8" : 883.144666691159, 
+  "Batch Size 128": 272.52348265485165,
+  # "(Effective) Batch Size 1024" : 365.486673150519
 
   # "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1" : 0.1269359383082901,
 
@@ -91,12 +95,12 @@ datapoints = [
   # {"AI" : "(Layer Norm Fwd Quant) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1012.3228070175439,  "label"  : "Layer Norm Small Batch"},
   # {"AI" : "(Layer Norm Fwd Quant) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 5020.780493468795,  "label"  : "Layer Norm Large Batch"},
 
-  {"AI" : "Batch Size 1", "GFLOP/s" : 47043.54560716284,  "label"  : "Batch Size 1"}, 
-  {"AI" : "(Effective) Batch Size 1", "GFLOP/s" : 47043.54560716284,  "label"  : "(Effective) Batch Size 1"},
-  {"AI" : "Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "Batch Size 8"}, 
-  {"AI" : "(Effective) Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "(Effective) Batch Size 8"},
-  {"AI" : "Batch Size 1024", "GFLOP/s" : 74638.22222222223,  "label"  : "Batch Size 1024"}, 
-  {"AI" : "(Effective) Batch Size 1024", "GFLOP/s" : 74638.22222222223,  "label"  : "(Effective) Batch Size 1024"},
+  {"AI" : "Batch Size 1", "GFLOP/s" : 6710.89,  "label"  : "Batch Size 1"}, 
+  # {"AI" : "(Effective) Batch Size 1", "GFLOP/s" : 47043.54560716284,  "label"  : "(Effective) Batch Size 1"},
+  # {"AI" : "Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "Batch Size 8"}, 
+  # {"AI" : "(Effective) Batch Size 8", "GFLOP/s" : 52998.57577317175,  "label"  : "(Effective) Batch Size 8"},
+  {"AI" : "Batch Size 128", "GFLOP/s" : 10701.39,  "label"  : "Batch Size 128"}, 
+  # {"AI" : "(Effective) Batch Size 1024", "GFLOP/s" : 74638.22222222223,  "label"  : "(Effective) Batch Size 1024"},
   # {"AI" : "(GEMM Kernels) Batch Size 256, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 62.066447058823535,  "label"  : "GEMM Large Batch"},
 
   # {"AI" : "(Sigmoid Kernels) Batch Size 1, Sequence Length 161, New Tokens 1",        "GFLOP/s" : 1025.737556561086,  "label"  : "Sigmoid Small Batch"},
