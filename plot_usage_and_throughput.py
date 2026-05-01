@@ -214,7 +214,7 @@ def main():
     
     plot_multi_metric(df, ["Single Precision GFLOP/s"], "Single Precision GFLOP Per Second", "Single Precision GFLOPs Per Second")
     plot_multi_metric(df, ["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"], "Tensor Math Operations (Billion Per Second)", "Tensor Math Operations over Time")
-    plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.sum.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
+    # plot_multi_metric(df, ["dram__throughput.sum.pct_of_peak_sustained_elapsed (%)", "sm__throughput.sum.pct_of_peak_sustained_elapsed (%)"], "DRAM and Streaming Multiprocessor Throughput", "% of theortical peak sustained")
     plot_multi_metric(df, ["(Single Precision) Compute Intensity", "(Half Precision) Compute Intensity", "(Tensor Cores) Compute Intensity"], "Compute Intensity", "Compute Intensity Over Time")
     plot_multi_metric_stacked_bar_chart(df, "stall count", "Stall Count")
     

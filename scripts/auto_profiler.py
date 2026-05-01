@@ -107,7 +107,7 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -122,7 +122,10 @@ def flatten_kernels(df):
         "ns":   1e-3,
         "inst": 1,
         "1/ns" : 1, 
-        "1/s": 1e-9
+        "1/s": 1e-9,
+        "inst/ns": 1,
+        "inst/us": 1e-3,
+        "inst/s": 1e-9 
     }
 
     # Canonical names for the base units
@@ -131,6 +134,7 @@ def flatten_kernels(df):
         "us": "us", "ms": "us", "ns": "us", "s": "us",
         "inst": "inst",
         "1/ns": "1/ns", "1/s": "1/ns",
+        "inst/ns": "inst/ns", "inst/s": "inst/ns", "inst/us": "inst/ns"
     }
 
     df["Metric Value"] = df["Metric Value"].astype(float)
@@ -178,18 +182,21 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
              df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
              df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
 
-    df["Single Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                    df['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                    (df['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-            ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    df["Half Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                df['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                (df['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-        ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
-    df["Double Precision GFLOP/s"] = ((df['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                df['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed (inst/cycle)'] +
-                (df['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_cycle_elapsed (inst/cycle)']*2)
-        ) * df['smsp__cycles_elapsed.avg.per_second (Ghz)'])
+    df["Single Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_second (inst/ns)'] +
+        (df['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_second (inst/ns)']*2)
+    ) 
+    df["Half Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_second (inst/ns)'] +
+       (df['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_second (inst/ns)']*2)
+        )
+    df["Double Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_second (inst/ns)'] +
+       (df['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_second (inst/ns)']*2)
+    )
 
     tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
     tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 

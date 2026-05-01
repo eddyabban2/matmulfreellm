@@ -153,7 +153,7 @@ def all_metrics():
         usage_metrics + 
         jetson_memory)
 
-# python auto_profiler.py -s 100 --max_new_tokens 1 --model_name ridger/MMfreeLM-370M --metrics jetson                                                                                                                                              
+# python auto_profiler.py -s 100 --max_new_tokens 1 --model_name ridger/MMfreeLM-370M --metrics jetson --min_batch_power 0 --max_batch_power 7                                                                                                                                          
 def jetson_metrics():
     return ",".join(
        jetson_memory + 
