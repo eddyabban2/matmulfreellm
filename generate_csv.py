@@ -309,7 +309,7 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-2.7B']
+    models = ['ridger/MMfreeLM-370M']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
