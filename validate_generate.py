@@ -17,7 +17,7 @@ def main():
     example_input_token = torch.load('example_input_tensor.pt')
     print(f"Input Tokens: {tokenizer.batch_decode(example_input_token, skip_special_tokens=True)[0]}")
 
-    current_output_token = model.generate(example_input_token.cuda(), max_new_tokens=1, do_sample=False)
+    current_output_token = model.generate(example_input_token.cuda(), max_new_tokens=sequence_length, do_sample=False)
     expected_output_token = torch.load('example_output_tensor.pt')
 
     if torch.equal(current_output_token, expected_output_token):
