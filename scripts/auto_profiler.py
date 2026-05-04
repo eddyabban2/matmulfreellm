@@ -63,7 +63,6 @@ parser.add_argument(
     choices=['all', 'jetson'],
     default="all")
 
-
 args = parser.parse_args()
 
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
@@ -103,11 +102,12 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
         "-s", str(seq_len),
         "-n", str(new_tokens),
         "-i", "1", 
-        "--model_name", model_name
+        "--model_name", model_name, 
+        "--use_dataset_prompts"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)

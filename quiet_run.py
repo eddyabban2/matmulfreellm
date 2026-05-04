@@ -4,7 +4,7 @@ import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids
+from utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
 import statistics
@@ -30,6 +30,12 @@ parser.add_argument(
     help="changes the model to using the original implementation"
 )
 
+parser.add_argument(
+    "--use_dataset_prompts",
+    action='store_true',
+    default=False,
+    help="changes whether we are using random prompts or dataset prompts"
+)
 
 parser.add_argument(
     "-s",
@@ -80,14 +86,22 @@ batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
 
-batch = generate_random_input_ids(model_name, batch_size, seq_len)
+if(args.use_original):
+    import mmfreelm_original
+else:
+    import mmfreelm
+batch = None
+
+if args.use_dataset_prompts:
+    batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
+else: 
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
 
-tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 
-
+print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
     _ = model.generate(
