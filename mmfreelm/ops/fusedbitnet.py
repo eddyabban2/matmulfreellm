@@ -474,7 +474,6 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             y = y.to(linear_weight.dtype)
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
                 out = F.linear(y, linear_weight, linear_bias)
-           # print(f"output: {out.type()}, y type: {y.type()}, weight_type: {linear_weight.type()}")
             #print(out.size())
             # print(f"output: {out.size()}")
             # We don't store y, will be recomputed in the backward pass to save memory
