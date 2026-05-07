@@ -1,4 +1,3 @@
-bench_utils
 causal_conv1d
 einops
 matplotlib
