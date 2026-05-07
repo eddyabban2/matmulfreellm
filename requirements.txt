@@ -1,0 +1,13 @@
+bench_utils
+causal_conv1d
+einops
+matplotlib
+numpy
+nvtx
+packaging
+pandas
+setuptools
+torch
+transformers==4.46.0
+triton
+zeus
