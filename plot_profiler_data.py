@@ -52,7 +52,7 @@ def create_batch_power_graph(data_points, metric_key):
         ax.plot(grouped_data[key]['batch_size'], grouped_data[key]['metric'], label=key)
     ax.legend()
     ax.set_title(f"Batch Size Vs {metric_key}")
-    fig.savefig(f'graphs/batch_size vs {metric_key}.png')
+    fig.savefig(f'outputs/images/batch_size vs {metric_key}.png')
     
 
 
@@ -69,9 +69,9 @@ def main():
     create_batch_power_graph(data_points, "time_to_first_token_sec")
     create_batch_power_graph(data_points, "tokens_per_second")
     create_batch_power_graph(data_points, "run_time_seconds")
-    create_batch_power_graph(data_points, "total_energy_joules")
-    create_batch_power_graph(data_points, "joules_per_token")
-    create_batch_power_graph(data_points, "joules_per_token")
+    # create_batch_power_graph(data_points, "total_energy_joules")
+    # create_batch_power_graph(data_points, "joules_per_token")
+    # create_batch_power_graph(data_points, "joules_per_token")
     # create_batch_power_graph(data_points, "FLOPS")
 
 
