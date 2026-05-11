@@ -475,10 +475,11 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             y = y.to(linear_weight.dtype)
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
                 out = F.linear(y, linear_weight, linear_bias)
-            if out != None:
-                out.div_(scale)
-            else:
-                print("out does not equal none please panic")
+            with nvtx.annotate("applying scale", color="green"):    
+                if scale != None:
+                    out.div_(scale)
+                else:
+                    print("out does not equal none please panic")
            # print(f"output: {out.type()}, y type: {y.type()}, weight_type: {linear_weight.type()}")
             #print(out.size())
             # print(f"output: {out.size()}")
