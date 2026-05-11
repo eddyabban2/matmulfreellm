@@ -46,7 +46,7 @@ def weight_quant(w):
         # Compute the scale factor
         scale = 1.0 / w.abs().mean().clamp_(min=1e-5)
         # Quantize and then de-quantize the tensor
-        u = (w * scale).round().clamp_(-1, 1) / scale
+        u = (w * scale).round().clamp_(-1, 1) # / scale
         return u
 
 
@@ -436,6 +436,7 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
         prenorm=False,
         residual_in_fp32=False,
         is_rms_norm=False,
+        scale=None
     ):
         annotation_name = "LayerNormLinearQuantFn"
         if(residual != None):
@@ -474,6 +475,11 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             y = y.to(linear_weight.dtype)
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
                 out = F.linear(y, linear_weight, linear_bias)
+            if out != None:
+                out = out / scale 
+            else:
+                print("out does not equal none please panic")
+           # print(f"output: {out.type()}, y type: {y.type()}, weight_type: {linear_weight.type()}")
             #print(out.size())
             # print(f"output: {out.size()}")
             # We don't store y, will be recomputed in the backward pass to save memory
@@ -620,12 +626,14 @@ class FusedBitLinear(BitLinear):
         # Initialize the superclass nn.Linear with the given parameters
         super(FusedBitLinear, self).__init__(in_features, out_features, bias=bias)
         self.cached_weights = None
+        self.cached_scale = None
 
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear At Bottom", color="red"):
             if(self.cached_weights == None):
                 # print("weights are not cached cacheing")
                 self.cached_weights = weight_quant(self.weight)
+                self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
             # if self.cached_weights != None and torch.equal(self.weight, self.cached_weights):
             #     print("error the weights have changed")
             return layer_norm_linear_quant_fn(
@@ -634,5 +642,6 @@ class FusedBitLinear(BitLinear):
                 self.norm.bias,
                 self.cached_weights,
                 self.bias,
-                is_rms_norm=True
+                is_rms_norm=True, 
+                scale = self.cached_scale
             )
