@@ -476,7 +476,7 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             with nvtx.annotate("linearFunction(tmatmul)", color="yellow"):
                 out = F.linear(y, linear_weight, linear_bias)
             if out != None:
-                out = out / scale 
+                out.div_(scale)
             else:
                 print("out does not equal none please panic")
            # print(f"output: {out.type()}, y type: {y.type()}, weight_type: {linear_weight.type()}")
@@ -547,6 +547,7 @@ def layer_norm_linear_quant_fn(
     prenorm=False,
     residual_in_fp32=False,
     is_rms_norm=False,
+    scale=None,
 ):
     return LayerNormLinearQuantFn.apply(
         x,
@@ -559,6 +560,7 @@ def layer_norm_linear_quant_fn(
         prenorm,
         residual_in_fp32,
         is_rms_norm,
+        scale,
     )
 
 
@@ -634,6 +636,7 @@ class FusedBitLinear(BitLinear):
                 # print("weights are not cached cacheing")
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
+                del self.weight
             # if self.cached_weights != None and torch.equal(self.weight, self.cached_weights):
             #     print("error the weights have changed")
             return layer_norm_linear_quant_fn(
@@ -643,5 +646,5 @@ class FusedBitLinear(BitLinear):
                 self.cached_weights,
                 self.bias,
                 is_rms_norm=True, 
-                scale = self.cached_scale
+                scale=self.cached_scale
             )

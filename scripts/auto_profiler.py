@@ -40,7 +40,6 @@ parser.add_argument(
     help="sets the model name"
 )
 
-
 parser.add_argument(
     "--max_new_tokens",
     default="1",
