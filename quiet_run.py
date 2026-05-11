@@ -8,7 +8,6 @@ from utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
 import statistics
-from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
 import nvtx
 
