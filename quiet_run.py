@@ -62,6 +62,7 @@ parser.add_argument(
     default='ridger/MMfreeLM-2.7B',
     help="sets the model name to be used"
 )
+
 parser.add_argument(
     "--prefill_decode",
     action='store_true',

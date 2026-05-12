@@ -102,7 +102,8 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
         "-n", str(new_tokens),
         "-i", "1", 
         "--model_name", model_name, 
-        "--use_dataset_prompts"
+        "--use_dataset_prompts", 
+        ""--prefill_decode"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)

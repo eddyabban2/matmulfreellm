@@ -1,6 +1,7 @@
 import subprocess
 import argparse
 import sys
+import os
 sys.path.append('..')
 
 parser = argparse.ArgumentParser(
@@ -14,33 +15,48 @@ parser.add_argument(
     help="sets the sequence length of input tokens"
 )
 
+parser.add_argument(
+    "--prefill_decode",
+    action='store_true',
+    default=False,
+    help="sets whether we mark prefill and decode sections of the workload"
+)
+
 args = parser.parse_args()
 metric_profile = args.profile
+prefill_decode = args.prefill_decode
 
 nsys_path = subprocess.check_output(["which", "nsys"]).decode('ascii').strip()
+os.chdir('../')
 print(f"Extracted nsys path: {nsys_path}")
 
-output_file = "/home/eabban/matmulfreellm/nsys_runs/generate"
+def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    model_name = model_name.replace("/", "-")
+    return  os.getcwd() + "/outputs/nsys_runs/nsys_profiler" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "prefillAndDecode" + str(prefill_decode)
 
-# nsys_command="nsys profile --output=$output_file --trace=cuda,nvtx --stats=true -p generate \
-#   $python_command /home/eabban/matmulfreellm/quiet_run.py -b 5 -i 10 -s 32 --max_new_tokens 32 "
+batch_size = 5
+seq_len = 5 
+new_tokens = 5 
 
-
+report_name = create_report_name(batch_size, new_tokens, seq_len)
+print(report_name)
 command = [
     nsys_path, "profile",
     "--force-overwrite", "true",
-    "--output=" + output_file, 
+    "--output=" + report_name, 
    "--trace=cuda,nvtx", 
    "--stats=true",
    "--capture-range=nvtx", 
    "-p", "workload", 
    # "--nvtx-domain-include", "workload,warmup", 
-   "python", "/home/eabban/matmulfreellm/quiet_run.py", 
-    "-b", "1",
+   "python", os.getcwd() + "/quiet_run.py", 
+    "-b", str(batch_size),
     "-i", "1", 
-    "-s", "1", 
-    "--max_new_tokens", "2"
+    "-s", str(seq_len), 
+    "-n", str(new_tokens)
 ]
+if prefill_decode: 
+    command.append("--prefill_decode")
 
 print(f"running command {' '.join(command)}")
 exit_code = subprocess.run(command, check=False)
