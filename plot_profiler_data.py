@@ -8,6 +8,8 @@ python create_graphs.py --csv_file results.csv
 import csv
 import argparse
 import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
 
 parser = argparse.ArgumentParser(
@@ -54,7 +56,46 @@ def create_batch_power_graph(data_points, metric_key):
     ax.set_title(f"Batch Size Vs {metric_key}")
     fig.savefig(f'outputs/images/batch_size vs {metric_key}.png')
     
-
+def create_3d_plot(data_points, metric_key_one, metric_key_two):
+    grouped_data = {}
+    for data_point in data_points:
+        print(data_point)
+        key = data_point['device'] + "-" + data_point["model"]
+        batch_size  = int(data_point["batch size"])
+        metric_one = float(data_point[metric_key_one])
+        metric_two = float(data_point[metric_key_two])
+        print(f"\tkey: {key}")
+        print(f"\tbatch_size: {batch_size}")
+        print(f"\tmetric one: {metric_one}")
+        print(f"\tmetric two: {metric_two}")
+        if(key in grouped_data):
+            grouped_data[key]['batch_size'].append(batch_size) 
+            grouped_data[key]['metric one'].append(metric_one)
+            grouped_data[key]['metric two'].append(metric_two)
+        else:
+            grouped_data[key] = {}
+            grouped_data[key]['batch_size'] = [batch_size]
+            grouped_data[key]['metric one'] = [metric_one]
+            grouped_data[key]['metric two'] = [metric_two]
+    
+    df = pd.DataFrame({
+        'batch_size': grouped_data[key]['batch_size'],
+        metric_key_one: grouped_data[key]['metric one'],
+        metric_key_two: grouped_data[key]['metric two']
+    })
+    
+    pivot_table = df.pivot_table(
+        index='batch_size', 
+        columns=metric_key_one, 
+        values=metric_key_two
+    )
+    
+    # Create heatmap (minimal changes from original)
+    fig = plt.figure()
+    sns.heatmap(pivot_table, annot=True, fmt='.2f', cmap='viridis')
+    plt.xlabel(metric_key_one)
+    plt.ylabel("batch size")
+    fig.savefig(f'outputs/images/batch_size vs {metric_key_one} VS {metric_key_two}.png')
 
 
 def extract_data_points(csv_file_name):
@@ -66,9 +107,10 @@ def extract_data_points(csv_file_name):
 def main():
     csv_file_name = args.csv_file
     data_points = extract_data_points(csv_file_name)
-    create_batch_power_graph(data_points, "time_to_first_token_sec")
-    create_batch_power_graph(data_points, "tokens_per_second")
-    create_batch_power_graph(data_points, "run_time_seconds")
+    # create_batch_power_graph(data_points, "time_to_first_token_sec")
+    # create_batch_power_graph(data_points, "tokens_per_second")
+    # create_batch_power_graph(data_points, "run_time_seconds")
+    create_3d_plot(data_points, "run_time_seconds", "tokens_per_second")
     # create_batch_power_graph(data_points, "total_energy_joules")
     # create_batch_power_graph(data_points, "joules_per_token")
     # create_batch_power_graph(data_points, "joules_per_token")

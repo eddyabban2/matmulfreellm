@@ -62,6 +62,12 @@ parser.add_argument(
     default='ridger/MMfreeLM-2.7B',
     help="sets the model name to be used"
 )
+parser.add_argument(
+    "--prefill_decode",
+    action='store_true',
+    default=False,
+    help="sets whether we mark prefill and decode sections of the workload"
+)
 
 print("quiet run is running")
 args = parser.parse_args()
@@ -84,6 +90,7 @@ num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
+prefill_decode = args.prefill_decode
 
 if(args.use_original):
     import mmfreelm_original
@@ -113,14 +120,31 @@ with nvtx.annotate("warmup", color="white"):
 print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
-    for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
+    if prefill_decode:
+        with nvtx.annotate("prefill", color="red"):
+            with torch.no_grad():
+                out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+        with nvtx.annotate("switching between pre and deco", color="green"):
+            past = out.past_key_values
+            next_tok = out.logits[:, -1:, :].argmax(-1)
+            print("switching now")
+        with nvtx.annotate("decode", color="blue"):
+            with torch.no_grad():
+                for i in range(max_new_tokens-1):
+                    with nvtx.annotate(f"decodingStep{i}", color="cyan"):
+                        out = model(input_ids=next_tok, past_key_values=past,
+                                    use_cache=True, return_dict=True)
+                        past = out.past_key_values
+                        next_tok = out.logits[:, -1:, :].argmax(-1)
+    else: 
+        for _ in range(num_iterations):
+            _ = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    top_p=0.4,
+                    temperature=0.6
+                )
 
 print("inference worked")
