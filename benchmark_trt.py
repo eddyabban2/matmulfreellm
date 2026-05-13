@@ -25,6 +25,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tensorrt_generation import (
     CUDAGraphAccelerator,
     ONNXTRTAccelerator,
+    default_trt_cache_paths,
+    export_mmfreelm_onnx_for_trt,
+    trt_builder_available,
     trt_dependencies_available,
 )
 
@@ -69,6 +72,9 @@ class BaselineModel:
 
 
 def n_params(model):
+    gc = getattr(model, "_gflops_param_count", None)
+    if gc is not None:
+        return int(gc)
     raw = model
     for attr in ("fwd", "model"):
         raw = getattr(raw, attr, raw)
@@ -164,45 +170,91 @@ def parse_args():
 
 def main():
     args = parse_args()
-    print(f"[INFO] Loading {MODEL_NAME} …")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME).cuda().half()
-    model.eval()
 
-    if args.fixed_point:
-        try:
-            from generate_integrated import replace_with_fixed_point_hgrn
+    accel = None
+    label = ""
+    probe_msg = ""
 
-            model = replace_with_fixed_point_hgrn(model)
-            print("[INFO] ✓ HGRN → fixed-point.")
-        except ImportError:
-            print("[WARN] generate_integrated not found.")
-
-    if args.mode == "cudagraphs":
-        print("[INFO] Mode: CUDA Graphs")
-        accel = CUDAGraphAccelerator(model)
-        label = "CUDA Graphs FP16"
-
-    elif args.mode == "onnx_trt":
-        if not trt_dependencies_available():
-            print("[WARN] Falling back to CUDA Graphs.")
-            accel = CUDAGraphAccelerator(model)
-            label = "CUDA Graphs FP16 (fallback)"
-        else:
-            print("[INFO] Mode: ONNX → TensorRT (JetPack native)")
+    if (
+        args.mode == "onnx_trt"
+        and not args.fixed_point
+        and trt_dependencies_available()
+    ):
+        ok, probe_msg = trt_builder_available()
+        if ok:
+            ep, op = default_trt_cache_paths(MODEL_NAME)
+            meta_path = op + ".meta.json"
+            if args.rebuild_engine:
+                for p in (ep, op, meta_path):
+                    if os.path.exists(p):
+                        os.remove(p)
+            if not os.path.isfile(op):
+                print(
+                    "[INFO] Exporting ONNX on CPU (frees GPU VRAM for TensorRT build)…"
+                )
+                export_mmfreelm_onnx_for_trt(MODEL_NAME, op)
+            torch.cuda.empty_cache()
             accel = ONNXTRTAccelerator(
-                model,
+                None,
                 max_batch=args.batches,
                 max_seq=args.max_length + 64,
                 model_name=MODEL_NAME,
                 use_fp16=True,
-                rebuild=args.rebuild_engine,
+                rebuild=False,
             )
             label = "TensorRT FP16 (JetPack)"
-    else:
-        print("[INFO] Mode: Baseline FP16")
-        accel = BaselineModel(model, tokenizer)
-        label = "Baseline FP16"
+
+    if accel is None:
+        print(f"[INFO] Loading {MODEL_NAME} …")
+        torch.cuda.empty_cache()
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME, low_cpu_mem_usage=True
+        ).cuda().half()
+        model.eval()
+
+        if args.fixed_point:
+            try:
+                from generate_integrated import replace_with_fixed_point_hgrn
+
+                model = replace_with_fixed_point_hgrn(model)
+                print("[INFO] ✓ HGRN → fixed-point.")
+            except ImportError:
+                print("[WARN] generate_integrated not found.")
+
+        if args.mode == "cudagraphs":
+            print("[INFO] Mode: CUDA Graphs")
+            accel = CUDAGraphAccelerator(model)
+            label = "CUDA Graphs FP16"
+
+        elif args.mode == "onnx_trt":
+            if not trt_dependencies_available():
+                print("[WARN] TensorRT / PyCUDA missing — falling back to CUDA Graphs.")
+                accel = CUDAGraphAccelerator(model)
+                label = "CUDA Graphs FP16 (fallback: no TRT/pycuda)"
+            else:
+                ok2, pm = trt_builder_available()
+                if not ok2:
+                    print("[VERIFY] TensorRT Builder FAILED — TensorRT is NOT used.")
+                    print(f"           Reason: {pm}")
+                    print("[WARN] Falling back to CUDA Graphs (GPU, not TRT runtime).")
+                    accel = CUDAGraphAccelerator(model)
+                    label = "CUDA Graphs FP16 (fallback: TRT builder)"
+                else:
+                    print("[INFO] Mode: ONNX → TensorRT (GPU export path)")
+                    accel = ONNXTRTAccelerator(
+                        model,
+                        max_batch=args.batches,
+                        max_seq=args.max_length + 64,
+                        model_name=MODEL_NAME,
+                        use_fp16=True,
+                        rebuild=args.rebuild_engine,
+                    )
+                    label = "TensorRT FP16 (JetPack)"
+        else:
+            print("[INFO] Mode: Baseline FP16")
+            accel = BaselineModel(model, tokenizer)
+            label = "Baseline FP16"
 
     res = benchmark(
         accel,
@@ -232,8 +284,8 @@ def main():
     print("TIPS:")
     print("  --mode cudagraphs   Zero installs, graphs the forward pass")
     print("  --mode onnx_trt     Max throughput (pip install pycuda)")
-    print("  --rebuild-engine    Force TRT engine rebuild")
-    print("  --fixed-point       Ternary HGRN, combinable with any mode")
+    print("  --rebuild-engine    Force ONNX+engine rebuild (TensorRT mode)")
+    print("  --fixed-point       Ternary HGRN (uses GPU export + TRT)")
     print(f"{'='*80}")
 
 

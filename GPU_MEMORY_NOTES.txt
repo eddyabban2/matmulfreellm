@@ -9,7 +9,7 @@ Observed on-device (Jetson)
 ---------------------------
 - ridger/MMfreeLM-2.7B: full .cuda().half() load OOM (NvMap / allocator); 370M fits (~1.5 GiB alloc for weights + activations in FP16 tests).
 - TensorRT builder: CUDA error 35 in some contexts → fix JetPack/driver alignment; engine path reduces repeated PyTorch graph memory once built.
-- bitsandbytes INT8/INT4: often missing matching libbitsandbytes_cuda*.so on Jetson; use fake-quant weight tests or Jetson-native INT8 paths instead.
+- bitsandbytes INT8/INT4: Jetson needs a CUDA .so matching torch.version.cuda (e.g. cuda126 for 12.6) built for sm_87; recipe in scripts/install_bitsandbytes_jetson.sh. Keep NumPy <2 with JetPack torch. For quick weight-width estimates without kernels, use scripts/benchmark_weight_bits.py (fake quant).
 - PYTHONPATH: use in-tree mmfreelm (repo root) — venv mmfreelm can mismatch torch.distributed APIs.
 
 Lower VRAM (inference)
@@ -50,9 +50,12 @@ Related artifacts
 -----------------
 - outputs/benchmark_runs/ — measured tok/s, peaks
 - scripts/benchmark_weight_bits.py — precision vs footprint thought experiment
+- scripts/install_bitsandbytes_jetson.sh — CUDA bitsandbytes .so for Jetson venv
+- scripts/link_jetpack_tensorrt_venv.sh — .pth to system tensorrt in venv
 - tensorrt_changes.log — TRT/export caveats
 - GPU_MEMORY_NOTES.txt — VRAM / utilization checklist (ongoing)
 
 Log
 ---
 2026-05-07 — Initial notes; generate.py --low-cpu-mem / --no-cache; cross-link from tensorrt_changes.log.
+2026-05-07 — Documented Jetson venv paths: bitsandbytes cmake install + jetpack_tensorrt.pth; NumPy 1.26 with nv24.08 torch; removed pip tensorrt_cu13* from typical setup.

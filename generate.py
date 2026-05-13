@@ -17,9 +17,11 @@ FP16_STORAGE_BITS = 16.0
 
 
 def calculate_model_flops(model, num_tokens):
-    num_params = sum(p.numel() for p in model.parameters())
-    dense_flops = 2 * num_params * num_tokens
-    return dense_flops, num_params
+    n = getattr(model, "_gflops_param_count", None)
+    if n is None:
+        n = sum(p.numel() for p in model.parameters())
+    dense_flops = 2 * n * num_tokens
+    return dense_flops, n
 
 
 def dense_flops_to_ternary_mac_heuristic(dense_flops: float) -> float:
@@ -113,13 +115,15 @@ def print_benchmark_results(results, model, implementation_type):
     time_values = results["generation_time"]
     tokens_values = results["tokens_generated"]
 
-    num_params = sum(p.numel() for p in model.parameters())
+    n = getattr(model, "_gflops_param_count", None)
+    if n is None:
+        n = sum(p.numel() for p in model.parameters())
 
     print(f"\n{'='*80}")
     print(f"BENCHMARK RESULTS - {implementation_type}")
     print(f"{'='*80}")
     print("\nModel Configuration:")
-    print(f"  Total Parameters: {num_params:,}")
+    print(f"  Total Parameters: {n:,}")
     print(f"  Total Runs: {len(tps_values)}")
 
     print("\nTokens Per Second (TPS):")
@@ -234,31 +238,88 @@ def main():
         "The future of artificial intelligence will bring transformative changes to society, economy, and daily life in ways we are only beginning",
     ]
 
-    if args.fixed_point:
+    tokenizer = AutoTokenizer.from_pretrained(name)
+
+    if args.tensorrt and not args.fixed_point:
+        from tensorrt_generation import (
+            ONNXTRTAccelerator,
+            default_trt_cache_paths,
+            export_mmfreelm_onnx_for_trt,
+            trt_builder_available,
+            trt_dependencies_available,
+        )
+
+        if not trt_dependencies_available():
+            print(
+                "ERROR: --tensorrt requires tensorrt (JetPack) and pycuda. "
+                "Install pycuda in the same venv, then retry.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        ok_b, bmsg = trt_builder_available()
+        if not ok_b:
+            print(
+                "ERROR: TensorRT Builder cannot start — inference cannot use TensorRT.\n"
+                f"        {bmsg}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        ep, op = default_trt_cache_paths(name)
+        meta_path = op + ".meta.json"
+        if args.rebuild_trt_engine:
+            for p in (ep, op, meta_path):
+                if os.path.exists(p):
+                    os.remove(p)
+        if not os.path.isfile(op):
+            print("[INFO] Exporting ONNX on CPU for TensorRT …")
+            export_mmfreelm_onnx_for_trt(name, op)
+        torch.cuda.empty_cache()
+        max_prompt = _max_tokenized_length(tokenizer, prompts)
+        max_seq = max_prompt + args.max_length + 16
+        model = ONNXTRTAccelerator(
+            None,
+            max_batch=1,
+            max_seq=max_seq,
+            model_name=name,
+            use_fp16=True,
+            rebuild=False,
+        )
+        implementation_type = "Floating-Point + TensorRT"
+    elif args.fixed_point:
         print("Using fixed-point HGRN implementation with ternary_matmul operations...")
         from generate_integrated import replace_with_fixed_point_hgrn
 
-        tokenizer = AutoTokenizer.from_pretrained(name)
         model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda().half()
         model = replace_with_fixed_point_hgrn(model)
         print("✓ HGRN layers replaced with fixed-point implementation using ternary_matmul")
         implementation_type = "Fixed-Point HGRN"
     else:
         print("Using standard floating-point implementation...")
-        tokenizer = AutoTokenizer.from_pretrained(name)
         model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda().half()
         implementation_type = "Floating-Point"
 
-    if not use_cache:
+    if not use_cache and hasattr(model, "config"):
         model.config.use_cache = False
 
-    if args.tensorrt:
-        from tensorrt_generation import ONNXTRTAccelerator, trt_dependencies_available
+    if args.tensorrt and args.fixed_point:
+        from tensorrt_generation import (
+            ONNXTRTAccelerator,
+            trt_builder_available,
+            trt_dependencies_available,
+        )
 
         if not trt_dependencies_available():
             print(
                 "ERROR: --tensorrt requires tensorrt (JetPack) and pycuda. "
                 "Install pycuda in the same venv, then retry.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        ok_b, bmsg = trt_builder_available()
+        if not ok_b:
+            print(
+                "ERROR: TensorRT Builder cannot start — inference cannot use TensorRT.\n"
+                f"        {bmsg}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -272,7 +333,7 @@ def main():
             use_fp16=True,
             rebuild=args.rebuild_trt_engine,
         )
-        implementation_type = f"{implementation_type} + TensorRT"
+        implementation_type = f"{implementation_type} + TensorRT (GPU export)"
 
     results = benchmark_generation(
         model,

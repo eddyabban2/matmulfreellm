@@ -1,0 +1,92 @@
+Agent work summary — eddy_matmulfreellm (Cursor session)
+=========================================================
+This file records what was implemented and run in a multi-step working session.
+Updated: 2026-05-07 (§8 appended)
+
+1. TensorRT and shared inference backend
+----------------------------------------
+- Added tensorrt_generation.py: patches mmfreelm Triton ops to PyTorch for ONNX
+  traceability; ModelForwardWrapper; CUDAGraphAccelerator; ONNXTRTAccelerator
+  (ONNX export, JetPack TRT engine build, pycuda execute); decode_loop / sampling.
+- Engine and ONNX paths are hashed per model name under /tmp/mmfreelm_<id>.{engine,onnx}
+  so different checkpoints do not share one cache file.
+- ONNX export: temporarily swaps fused_recurrent_hgrn to naive PyTorch recurrent in
+  recurrent_fuse and hgrn_bit modules so tracing does not hit Triton autotune.
+- Refactored benchmark_trt.py to import the shared module; modes: baseline, cudagraphs,
+  onnx_trt.
+
+2. generate.py
+--------------
+- argparse: --model, --max-length, --iterations, --tensorrt, --rebuild-trt-engine,
+  --fixed-point (unchanged intent), --low-cpu-mem, --no-cache.
+- --tensorrt wraps the loaded HF model in ONNXTRTAccelerator; requires tensorrt + pycuda.
+- Benchmark output: dense 2|θ| GFLOPS/s plus a “ternary MAC~” column (1.58/16 heuristic
+  vs FP16 storage).
+- --low-cpu-mem: from_pretrained(..., low_cpu_mem_usage=True).
+- --no-cache: model.config.use_cache=False and use_cache=False on generate().
+
+3. FLOPs / correctness fixes in tensorrt_generation.py
+--------------------------------------------------------
+- PureTorchFusedBitLinear: in eval mode, caches one weight_quant tensor (matches
+  FusedBitLinear); training still recomputes. Cuts per-forward full-weight quant work.
+- ternary_quantize delegates to mmfreelm.ops.fusedbitnet.weight_quant for parity.
+- PureTorchFusedRMSNormSwishGate: correct RMSNorm + y * o * sigmoid(o); patch no longer
+  treats FusedRMSNormSwishGate as plain RMSNorm (which had wrongly used recurrent output
+  as “residual”).
+- patch_all_triton_ops reports norms, RMSNorm+SwishGate, and fused BitLinear counts.
+
+4. Documentation and logs
+-------------------------
+- tensorrt_changes.log: TRT integration steps, ONNX/HGRN notes, benchmark outcomes,
+  link to GPU_MEMORY_NOTES.txt.
+- GPU_MEMORY_NOTES.txt: living checklist for Jetson VRAM and utilization; instructs
+  future one-line log entries under “Log”.
+- .gitignore: allow GPU_MEMORY_NOTES.txt, tensorrt_changes.log, and this file.
+
+5. Benchmarks and experiments
+-----------------------------
+- Ran generate.py and benchmark_trt.py (370M): results under outputs/benchmark_runs/
+  with timestamps; summary CSV benchmark_summary_*.csv.
+- onnx_trt failed locally with TensorRT createInferBuilder / CUDA error 35 (environment).
+- scripts/benchmark_weight_bits.py: compares FP16 baseline vs per-tensor fake 8-bit and
+  4-bit weight quantization; writes weight_bits_*.txt. Requires PYTHONPATH to repo
+  root for in-tree mmfreelm (venv copy can break on torch.distributed).
+- generate_csv.py: stray local edits were reverted before git commit (tokenizer line /
+  model default had been broken).
+
+6. Git
+------
+- Commit created locally (e.g. message “Add TensorRT helper module, benchmarks, and GPU
+  memory notes”). Push was explicitly not performed.
+
+7. Environment caveats
+----------------------
+- Jetson: MMfreeLM-2.7B often OOM on full .cuda().half(); 370M used for most runs.
+- bitsandbytes (CUDA on Jetson): use JetPack PyTorch wheel (nv24.08 / CUDA 12.6),
+  NumPy 1.26.x, and a source-built libbitsandbytes_cuda126.so (sm_87). See
+  scripts/install_bitsandbytes_jetson.sh. Do not install bitsandbytes from Jetson
+  pip indexes without --no-deps (can upgrade torch to CUDA 13 wheels).
+- TensorRT inside a venv: remove pip tensorrt_cu13*; run scripts/link_jetpack_tensorrt_venv.sh
+  so `import tensorrt` resolves to /usr/lib/python3.x/dist-packages (JetPack 10.3).
+
+=========================================================
+End of summary (append future session bullets below this line).
+
+8. Jetson venv hardening — bitsandbytes, TensorRT, NumPy (session follow-up)
+------------------------------------------------------------------------------
+- Restored CUDA-enabled PyTorch in /home/jetson/venv via force-reinstall of the JetPack
+  wheel torch-2.5.0a0+872d972e41.nv24.08 (nvidia.com jp/v61 redist); avoids manylinux
+  aarch64 CPU-only torch from generic indexes.
+- Pinned NumPy to 1.26.4 (numpy>=1.26,<2) so the JetPack torch / NumPy ABI warnings and
+  _ARRAY_API failures go away.
+- bitsandbytes 0.49.2: CUDA backend verified (Linear8bitLt on cuda:0); libbitsandbytes_cuda126.so
+  matches torch.version.cuda 12.6 (Orin sm_87 build copied into site-packages/bitsandbytes).
+- Removed pip packages tensorrt_cu13, tensorrt_cu13_bindings, tensorrt_cu13_libs (CUDA 13 /
+  wrong stack vs JetPack TRT 10.3).
+- Added scripts/install_bitsandbytes_jetson.sh: clone or reuse $HOME/bitsandbytes-src, CMake
+  CUDA build COMPUTE_CAPABILITY=87, copy the cudaXY .so matching torch, smoke test; optional
+  bitsandbytes==tag via pip --no-deps if missing; documents the --no-deps index warning.
+- Added scripts/link_jetpack_tensorrt_venv.sh: writes jetpack_tensorrt.pth pointing at
+  /usr/lib/python3.x/dist-packages so venv code sees JetPack tensorrt (e.g. 10.3.0).
+- Updated GPU_MEMORY_NOTES.txt (bitsandbytes path, related scripts, Log) and
+  tensorrt_changes.log (venv hygiene + script pointers).

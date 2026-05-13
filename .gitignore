@@ -8,6 +8,7 @@ trace*.json
 *.csv
 *.txt
 !GPU_MEMORY_NOTES.txt
+!AGENT_WORK_SUMMARY.txt
 graphs/
 *.png
 *.sqlite

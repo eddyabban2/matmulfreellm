@@ -45,3 +45,26 @@ Default ridger/MMfreeLM-2.7B: NvMapMemAlloc / allocator error when moving full m
 - GPU_MEMORY_NOTES.txt: ongoing VRAM/utilization checklist; generate.py gains --low-cpu-mem and
   --no-cache (use_cache=False) for marginal footprint / long-run savings.
 
+- TRT verify (2026-05-07): trt.Builder CUDA error 35 on Orin while PyTorch CUDA OK; onnx_trt mode
+  probes trt_builder_available() and falls back to CUDA graphs with [VERIFY] message; generate.py
+  --tensorrt exits if builder fails. ~8.4 tok/s 370M (graphs), not 80 tok/s. Report:
+  outputs/benchmark_runs/tensorrt_verification_report.txt
+
+- Jetson venv hygiene (2026-05-07): pip tensorrt_cu13* removed; link system JetPack bindings with
+  scripts/link_jetpack_tensorrt_venv.sh (writes site-packages/jetpack_tensorrt.pth ->
+  /usr/lib/python3.10/dist-packages). bitsandbytes CUDA backend: scripts/install_bitsandbytes_jetson.sh
+  (cmake sm_87, copy libbitsandbytes_cuda*.so matching torch.version.cuda); keep numpy<2 with nv24.08 torch.
+
+- TensorRT 10.3 + MMfreeLM (2026-05-07 follow-up): IExecutionContext path updated from removed
+  execute_async_v2/bindings API to execute_async_v3 + set_input_shape + set_tensor_address (tensorrt_generation.py).
+  ONNX Parser: torch.export leaves external initializer files next to the .onnx; parser must run with
+  process cwd = that directory (chdir in _build_engine). CPU ONNX export: SwiGLU cuda.jiterator patched to
+  pure PyTorch for tracing ( _cpu_traceable_swiglu ). Optional env: MMFREELM_TRT_WORKSPACE_MB (default 384),
+  MMFREELM_TRT_FP32=1 to skip FP16 tactics, MMFREELM_TRT_MINIMAL_TACTICS=1 (CUBLAS|CUBLAS_LT only).
+  lightweight ONNXTRTAccelerator(None) after export_mmfreelm_onnx_for_trt avoids loading PyTorch weights on GPU.
+  Engine build for 370M can still OOM unified memory during Myelin/autotuning (~1.5GiB requests seen); free GPU/RAM
+  (reboot, headless) or use a machine with more free memory for build; runtime .engine is separate from build peak.
+  Default CPU ONNX export uses FP16 weights (halves Myelin “__mye* consts” vs FP32); override with MMFREELM_EXPORT_ONNX_FP32=1.
+  Use scripts/build_trt_engine_only.py (no PyTorch import) to save unified memory during compile; set MMFREELM_TRT_WORKSPACE_MB
+  (e.g. 128). Stale /tmp/model.model.* files from older exports can be removed after regenerating ONNX. NvMapMemAlloc error 12 +
+  CUDA OOM on small allocations usually means fragmented IOMMU/GPU carveout → reboot or stop GUI (sudo systemctl isolate multi-user.target).
