@@ -131,10 +131,8 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     batch = None
     if use_dataset_prompts:
         batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
-        row["InputSource"] = "IMDB Reviews"
     else:    
         batch = generate_random_input_ids(model_name, batch_size, seq_len)
-        row["InputSource"] = "Random Tokens"
 
     input_ids = batch["input_ids"].cuda()
     attention_mask = batch["attention_mask"].cuda()
@@ -321,37 +319,33 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
         for model_name in models:
             row = {'device': device, 'model': model_name}
             print(f"Collecting data for model: {model_name}")
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
             for batch_power in range(min_batch_power, max_batch_power):
-                for use_dataset in [True, False]:
-                    batch_size = 2**batch_power
-                    row['batch size'] = batch_size
-                    print(f"\tCollecting data for batch size: {batch_size}")
-                    print(f"\t\tRunning Benchmarks...")
-                    start_time = time.time()
-                    benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=use_dataset)
-                    end_time = time.time()
-                    print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+                batch_size = 2**batch_power
+                row['batch size'] = batch_size
+                print(f"\tCollecting data for batch size: {batch_size}")
+                print(f"\t\tRunning Benchmarks...")
+                start_time = time.time()
+                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                end_time = time.time()
+                print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
-                    # profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                print(f"\t\tCollecting time to first token data...")
+                start_time = time.time()
+                row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=True))
+                end_time = time.time()
+                print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
 
-                    print(f"\t\tCollecting time to first token data...")
-                    start_time = time.time()
-                    row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=use_dataset))
-                    end_time = time.time()
-                    print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
-
-                    # print("\t\t Collecting Power data")
-                    # start_time = time.time()
-                    # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                    # end_time = time.time()
-                    # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
-                    if(first_row):
-                        csvwriter = csv.DictWriter(csvfile, row.keys())
-                        csvwriter.writeheader()
-                        first_row = False
-                    csvwriter.writerow(row) 
+                # print("\t\t Collecting Power data")
+                # start_time = time.time()
+                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                # end_time = time.time()
+                # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
+                if(first_row):
+                    csvwriter = csv.DictWriter(csvfile, row.keys())
+                    csvwriter.writeheader()
+                    first_row = False
+                csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
 def main():

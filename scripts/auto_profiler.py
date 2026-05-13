@@ -40,7 +40,6 @@ parser.add_argument(
     help="sets the model name"
 )
 
-
 parser.add_argument(
     "--max_new_tokens",
     default="1",
@@ -356,6 +355,15 @@ def extract_additional_workload_data(df, workload_str):
     mlp_run_time_us = extract_run_time(mlp_df)
     mlp_dram_kbytes_accessed = extract_dram_usage(mlp_df)
 
+    scalar_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('applying scale')]
+    scalar_double_precision_count, scalar_single_precision_count, scalar_half_precision_count, scalar_tensor_count = extract_flops(scalar_df)
+    scalar_flop_count = scalar_double_precision_count +  scalar_single_precision_count +  scalar_half_precision_count +  scalar_tensor_count
+    scalar_run_time_us = extract_run_time(scalar_df)
+    scalar_dram_kbytes_accessed = extract_dram_usage(scalar_df)
+    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
+    #     print(scalar_df.head())
+    #     print(scalar_df.size)
+
     linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')]
     linear_double_precision_count, linear_single_precision_count, linear_half_precision_count, linear_tensor_count = extract_flops(linear_df)
     linear_flop_count = linear_double_precision_count +  linear_single_precision_count +  linear_half_precision_count +  linear_tensor_count
@@ -402,7 +410,10 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"{(linear_single_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 32 bit floating point operations\n")
         f.write(f"{(linear_half_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 16 bit floating point operations\n")
         f.write(f"{(linear_tensor_count/linear_flop_count)*100}% of the FLOPs in Linear are tensor floating point operations\n")
-
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(scalar_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with scalar overhead\n")
+        f.write(f"{(scalar_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with scalar overhead\n")
+        f.write(f"{(scalar_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with scalar overhead\n")
     # fraction of 
 
 def get_continous_group_of_kernals(df, condition, index):

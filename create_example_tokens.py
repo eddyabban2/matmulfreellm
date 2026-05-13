@@ -5,7 +5,7 @@ import time
 import torch
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 
 def main():
     # Original implementation

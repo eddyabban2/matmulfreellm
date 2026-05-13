@@ -13,11 +13,32 @@ def generate_random_input_ids(model_name, batch_size, sequence_length):
     # 3. Generate attention mask (typically all ones for fully valid random inputs)
     # attention_mask shape: (batch_size, sequence_length)
     attention_mask = torch.ones((batch_size, sequence_length), dtype=torch.long)
-
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask
     }
+
+def create_input_ids_from_text(model_name, text):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print("Warning: no pad token exists")
+    tokens = tokenizer(
+        text,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=False
+    )
+    input_ids = tokens.input_ids
+    attention_mask = tokens.attention_mask
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask
+    }
+
+def create_string_from_tokens(model_name, output):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    return tokenizer.batch_decode(output, skip_special_tokens=True)[0]
 
 def generate_dataset_input_ids(model_name, batch_size, sequence_length):
     # Load tokenizer only once using caching
@@ -42,8 +63,8 @@ def generate_dataset_input_ids(model_name, batch_size, sequence_length):
         truncation=True,
         max_length=sequence_length
     )
-    input_ids = tokens.input_ids.cuda()
-    attention_mask = tokens.attention_mask.cuda()
+    input_ids = tokens.input_ids
+    attention_mask = tokens.attention_mask
 
     has_padding = (attention_mask == 0).any()
     if(has_padding):
