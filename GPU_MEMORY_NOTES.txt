@@ -1,0 +1,58 @@
+GPU memory footprint & utilization — MMfreeLM / Jetson (living notes)
+================================================================================
+When changing loaders, cache flags, quant, or batching: add a dated one-line entry
+under "Log" at the bottom.
+
+Maintainer: append dated bullets when behavior or recommendations change.
+
+Observed on-device (Jetson)
+---------------------------
+- ridger/MMfreeLM-2.7B: full .cuda().half() load OOM (NvMap / allocator); 370M fits (~1.5 GiB alloc for weights + activations in FP16 tests).
+- TensorRT builder: CUDA error 35 in some contexts → fix JetPack/driver alignment; engine path reduces repeated PyTorch graph memory once built.
+- bitsandbytes INT8/INT4: often missing matching libbitsandbytes_cuda*.so on Jetson; use fake-quant weight tests or Jetson-native INT8 paths instead.
+- PYTHONPATH: use in-tree mmfreelm (repo root) — venv mmfreelm can mismatch torch.distributed APIs.
+
+Lower VRAM (inference)
+-----------------------
+1) Smaller checkpoint — e.g. MMfreeLM-370M vs 2.7B.
+2) FP16 only (already default); BF16 rarely saves VRAM vs FP16 on Jetson; FP32 doubles weights.
+3) Shorter sequences / max_new_tokens / max_length — activation memory scales with batch×seq×hidden; generation length drives peak.
+4) Batch size 1 for interactive benchmarks; increase batch only when headroom confirmed (nvidia-smi / tegrastats).
+5) HF loading: low_cpu_mem_usage=True chunked RAM read (helps host RAM, can ease GPU transfer pressure). Optional in generate.py: --low-cpu-mem.
+6) use_cache=False — HGRN stores compact recurrent state vs full transformer KV; disabling still saves some graph state / avoids cache bookkeeping on long runs. Optional: --no-cache in generate.py.
+7) Delete model + torch.cuda.empty_cache() between heavy scripts; avoid loading two full models at once.
+8) TensorRT / CUDA Graphs — single-step engine can cut fat from PyTorch autograd buffers during decode (TRT path: export + engine).
+9) Weight-only “storage” quant (8/4-bit fake or real INT8 kernels when available) — smaller disk; true VRAM drop needs packed weights + kernels (not yet default here).
+10) torch.compile — can change memory/latency tradeoffs; validate on this arch if enabled.
+
+Higher utilization (throughput)
+-------------------------------
+1) Larger batch when memory allows — benchmark_trt.py --batches N.
+2) CUDA Graph path — benchmark_trt.py --mode cudagraphs (captures forward; replay per step).
+3) TensorRT engine for decode — when TRT+CUDA healthy; rebuild after graph changes.
+4) Avoid CPU↔GPU sync in hot loops (torch.cuda.synchronize only around timing).
+5) Triton fused kernels (default mmfreelm) vs pure-PyTorch patch — Triton favors GPU occupancy; patch path trades for exportability.
+6) Mixed precision / autocast — test carefully; BitLinear paths may be sensitive.
+7) Multi-stream — advanced; usually not first lever on single small models.
+
+Training (if extended)
+----------------------
+- gradient_checkpointing=True — trade compute for activation memory (supported in modeling_hgrn_bit).
+- use_cache=False with checkpointing (HF convention).
+- Smaller microbatch + accumulation.
+
+generate.py convenience flags (when present)
+---------------------------------------------
+--low-cpu-mem     → from_pretrained(..., low_cpu_mem_usage=True)
+--no-cache        → config.use_cache=False, generate(..., use_cache=False)
+
+Related artifacts
+-----------------
+- outputs/benchmark_runs/ — measured tok/s, peaks
+- scripts/benchmark_weight_bits.py — precision vs footprint thought experiment
+- tensorrt_changes.log — TRT/export caveats
+- GPU_MEMORY_NOTES.txt — VRAM / utilization checklist (ongoing)
+
+Log
+---
+2026-05-07 — Initial notes; generate.py --low-cpu-mem / --no-cache; cross-link from tensorrt_changes.log.
