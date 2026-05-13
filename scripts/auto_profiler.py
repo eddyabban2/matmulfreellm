@@ -17,6 +17,7 @@ sys.path.append('..')
 import logging
 from utils import CustomThread
 curr_date=datetime.datetime.today().strftime('%m-%d-%Y')
+curr_date_time= datetime.datetime.now().strftime("%B %d, %Y at %I:%M%p")
 logger = logging.getLogger(__name__)
 FORMAT = "[%(asctime)s] [%(levelname)s] %(filename)s:%(lineno)s - %(funcName)s ] %(message)s"
 logging.basicConfig(format=FORMAT, filename=f'../outputs/logs/{curr_date}.log', filemode='a')
@@ -42,7 +43,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_new_tokens",
-    default="1",
+    default="2",
     help="sets the number of new tokens to be generated"
 )
 
@@ -83,11 +84,7 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
     benchmark_command = [
         ncu_path, "--nvtx",
-        # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
-        # "--nvtx-exclude", "warmup/",
         "--nvtx-include", "workload/",
-        # "--nvtx-include", "HGRNBitAttentionForward/",
-        # "--nvtx-include", "HGRNBitMLP/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
@@ -103,11 +100,11 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
         "-i", "1", 
         "--model_name", model_name, 
         "--use_dataset_prompts", 
-        ""--prefill_decode"
+        "--prefill_decode"
     ]
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(benchmark_command, check=True)
+    # subprocess.run(benchmark_command, check=True)
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -319,9 +316,17 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
     has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
     has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')
+    has_prefill = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')
+    has_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep0')
     first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
     first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
     linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
+    prefill_kernels_df = get_continous_group_of_kernals(df, has_prefill, 0)
+    decode_kernels_df = get_continous_group_of_kernals(df, has_decode, 0)
+
+    prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
+    decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
+    
 
     first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
     first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -332,11 +337,18 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
+    prefill_region_row = get_metrics_from_data_frame(prefill_kernels_df, fraction_of_memory_from_weights)
+    prefill_region_row['Workload'] = f'2.7B first prefill region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+    decode_region_row = get_metrics_from_data_frame(decode_kernels_df, fraction_of_memory_from_weights)
+    decode_region_row['Workload'] = f'2.7B first decode region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
     first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
     first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
 
+
     logger.info(f"full workload row generated: {full_workload_row}")
-    return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
+    return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row, prefill_region_row, decode_region_row]
 
 def extract_additional_workload_data(df, workload_str):
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
@@ -361,15 +373,24 @@ def extract_additional_workload_data(df, workload_str):
     scalar_flop_count = scalar_double_precision_count +  scalar_single_precision_count +  scalar_half_precision_count +  scalar_tensor_count
     scalar_run_time_us = extract_run_time(scalar_df)
     scalar_dram_kbytes_accessed = extract_dram_usage(scalar_df)
-    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
-    #     print(scalar_df.head())
-    #     print(scalar_df.size)
 
     linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')]
     linear_double_precision_count, linear_single_precision_count, linear_half_precision_count, linear_tensor_count = extract_flops(linear_df)
     linear_flop_count = linear_double_precision_count +  linear_single_precision_count +  linear_half_precision_count +  linear_tensor_count
     linear_run_time_us = extract_run_time(linear_df)
     linear_dram_kbytes_accessed = extract_dram_usage(linear_df)
+
+    # prefill_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')]
+    # prefill_double_precision_count, prefill_single_precision_count, prefill_half_precision_count, prefill_tensor_count = extract_flops(prefill_df)
+    # prefill_flop_count = prefill_double_precision_count +  prefill_single_precision_count +  prefill_half_precision_count +  prefill_tensor_count
+    # prefill_run_time_us = extract_run_time(prefill_df)
+    # prefill_dram_kbytes_accessed = extract_dram_usage(prefill_df)
+
+    # decode_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decode')]
+    # decode_double_precision_count, decode_single_precision_count, decode_half_precision_count, decode_tensor_count = extract_flops(decode_df)
+    # decode_flop_count = decode_double_precision_count +  decode_single_precision_count +  decode_half_precision_count +  decode_tensor_count
+    # decode_run_time_us = extract_run_time(decode_df)
+    # decode_dram_kbytes_accessed = extract_dram_usage(decode_df)
 
 
     with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "w") as f:
@@ -432,9 +453,12 @@ def log_full_df(df):
 def main():
     logger.info("Extracting Roofline Data")
     from datetime import datetime
-    filename = f'outputs/csvs/roofline_data{curr_date}.csv'
+    filename = f'outputs/csvs/roofline_data{curr_date_time}.csv'
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
+    if(max_new_tokens < 2):
+        print("generating less than 2 tokens will cause errors")
+        exit()
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     model_name = args.model_name

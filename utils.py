@@ -3,6 +3,8 @@ from transformers import AutoTokenizer
 from threading import Thread
 import pandas as pd
 import numpy as np
+import pynvml
+import torch
 
 def generate_random_input_ids(model_name, batch_size, sequence_length):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -76,6 +78,20 @@ def generate_dataset_input_ids(model_name, batch_size, sequence_length):
         "attention_mask": attention_mask
     }
 
+
+def get_free_gpu():
+    pynvml.nvmlInit()
+    num_gpus = pynvml.nvmlDeviceGetCount()
+    
+    memory_free = []
+    for i in range(num_gpus):
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        memory_free.append(info.free)
+    
+    pynvml.nvmlShutdown()
+    best = memory_free.index(max(memory_free))
+    return torch.device(f"cuda:{best}")
 
 class CustomThread(Thread):
     def __init__(self, group=None, target=None, name=None, args=(), kwargs={}, verbose=None):

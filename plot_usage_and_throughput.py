@@ -186,7 +186,7 @@ def main():
     # This can prevent Pandas from having to infer types row-by-row.
     # df = pd.read_csv(csv_name, dtype={'column_name': np.float32, 'integer_col': np.int32})
     try:
-        df = pd.read_csv(csv_name)
+        df = pd.read_csv(csv_name).head(n=100)
     except FileNotFoundError:
         print(f"Error: CSV file not found at {csv_name}")
         return
