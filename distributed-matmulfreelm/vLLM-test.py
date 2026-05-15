@@ -1,11 +1,11 @@
-from vllm import LLM, SamplingParams
+from vllm import LLM
 
-prompts = [
-    "Hello, my name is",
-    "The president of the United States is",
-    "The capital of France is",
-    "The future of AI is",
-]
-sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+# For generative models (task=generate) only
+llm = LLM(model='ridger/MMfreeLM-2.7B', runner="generate")  # Name or path of your model
+output = llm.generate("Hello, my name is")
+print(output)
 
-llm = LLM(model="facebook/opt-125m")
+# # For pooling models (task={embed,classify,reward,score}) only
+# llm = LLM(model=..., task="embed")  # Name or path of your model
+# output = llm.encode("Hello, my name is")
+# print(output)
