@@ -139,7 +139,7 @@ with nvtx.annotate("workload", color="cyan"):
                         next_tok = out.logits[:, -1:, :].argmax(-1)
     else: 
         for _ in range(num_iterations):
-            _ = model.generate(
+            model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=max_new_tokens,
@@ -147,5 +147,4 @@ with nvtx.annotate("workload", color="cyan"):
                     top_p=0.4,
                     temperature=0.6
                 )
-
 print("inference worked")

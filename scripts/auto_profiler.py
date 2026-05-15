@@ -318,14 +318,19 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')
     has_prefill = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')
     has_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep0')
+    has_second_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep1')
     first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
     first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
     linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
     prefill_kernels_df = get_continous_group_of_kernals(df, has_prefill, 0)
     decode_kernels_df = get_continous_group_of_kernals(df, has_decode, 0)
+    second_decode_kernels_df = get_continous_group_of_kernals(df, has_second_decode, 0)
+
 
     prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
     decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
+    if second_decode_kernels_df.shape[0] > 0:
+        decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/second_decode_kernels-{workload_string}.csv")
     
 
     first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)

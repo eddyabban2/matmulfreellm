@@ -173,10 +173,44 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
 
+def detailed_runtime_metrics(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
+
+    if use_dataset_prompts:
+        batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
+    else:    
+        batch = generate_random_input_ids(model_name, batch_size, seq_len)
+
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+
+    torch.cuda.synchronize()
+    start_time = time.time()
+    with torch.no_grad():
+        out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+    torch.cuda.synchronize()
+    end_time = time.time()
+
+    prefill_time = end_time - start_time
+    decode_times = []
+    past = out.past_key_values
+    next_tok = out.logits[:, -1:, :].argmax(-1)
+    with torch.no_grad():
+        for i in range(max_new_tokens-1):
+                torch.cuda.synchronize()
+                start_time = time.time()
+                out = model(input_ids=next_tok, past_key_values=past,
+                            use_cache=True, return_dict=True)
+                past = out.past_key_values
+                next_tok = out.logits[:, -1:, :].argmax(-1)
+                torch.cuda.synchronize()
+                end_time = time.time()
+                decode_times.append(end_time - start_time)
+    row["Prefill Time (s)"] = prefill_time
+    row["Deocde Time"] = sum(decode_times)
+    row["Avg Single Decode Forward Pass (s)"] = statistics.mean(decode_times)
+
 def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
-    
-    
     if use_dataset_prompts:
         batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
     else:    
@@ -307,7 +341,7 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-370M']
+    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-2.7B' ]
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -325,16 +359,21 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
                 row['batch size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
                 print(f"\t\tRunning Benchmarks...")
+                # start_time = time.time()
+                # benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                # end_time = time.time()
+                # print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+
                 start_time = time.time()
-                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
                 end_time = time.time()
                 print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
-                print(f"\t\tCollecting time to first token data...")
-                start_time = time.time()
-                row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=True))
-                end_time = time.time()
-                print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
+                # print(f"\t\tCollecting time to first token data...")
+                # start_time = time.time()
+                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=True))
+                # end_time = time.time()
+                # print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
 
                 # print("\t\t Collecting Power data")
                 # start_time = time.time()
