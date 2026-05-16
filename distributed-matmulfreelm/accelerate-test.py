@@ -15,12 +15,19 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 # "auto" will automatically split the layers across all available GPUs
 model = AutoModelForCausalLM.from_pretrained(
     model_id, 
-    device_map="auto", 
-    torch_dtype=torch.bfloat16
+    device_map="auto"
 )
+print(model)
+# tokenizer.pad_token = tokenizer.eos_token
+# # print(model)
 
-input_prompt = "In a shocking finding, scientists discovered a herd of unicorns living in a remote, "
-input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.to("cuda")
+# local_rank = int(os.getenv('LOCAL_RANK', '0'))
+# world_size = int(os.getenv('WORLD_SIZE', '2')) # e.g., 2 GPUs
 
-outputs = model.generate(input_ids, max_length=32, do_sample=True, top_p=0.4, temperature=0.6)
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+# device = torch.device(f"cuda:{local_rank % torch.cuda.device_count()}")
+# torch.distributed.init_process_group(rank=local_rank, world_size=world_size)
+# input_prompt = "In a shocking finding, scientists discovered a herd of unicorns living in a remote, "
+# input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.to("cuda")
+
+# outputs = model.generate(input_ids, max_length=32, do_sample=True, top_p=0.4, temperature=0.6)
+# print(tokenizer.decode(outputs[0], skip_special_tokens=True))

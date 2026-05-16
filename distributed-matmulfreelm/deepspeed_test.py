@@ -1,8 +1,10 @@
 import os
 import torch
 import deepspeed
-import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import sys
+sys.path.append('..')
+import mmfreelm
 
 # DeepSpeed requires local_rank environment variable or initializing via deepspeed runner
 local_rank = int(os.getenv('LOCAL_RANK', '0'))
@@ -24,9 +26,9 @@ model = deepspeed.init_inference(
 )
 
 # DeepSpeed wraps the model, moving it to the correct local GPU device
-input_prompt = "In a shocking finding, scientists discovered a herd of unicorns..."
+input_prompt = "Eddy is"
 input_ids = tokenizer(input_prompt, return_tensors="pt").input_ids.to(f"cuda:{local_rank}")
 
+outputs = model.generate(input_ids, max_length=32, use_cache=False)
 if local_rank == 0:
-    outputs = model.generate(input_ids, max_length=32)
     print(tokenizer.decode(outputs[0], skip_special_tokens=True))
