@@ -40,7 +40,8 @@ def create_input_ids_from_text(model_name, text):
 
 def create_string_from_tokens(model_name, output):
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    return tokenizer.batch_decode(output, skip_special_tokens=True)[0]
+    # return tokenizer.batch_decode(output, skip_special_tokens=True)
+    return tokenizer.decode(output, skip_special_tokens=True)
 
 def generate_dataset_input_ids(model_name, batch_size, sequence_length):
     # Load tokenizer only once using caching
@@ -56,7 +57,6 @@ def generate_dataset_input_ids(model_name, batch_size, sequence_length):
     
     sampled_indices = np.random.choice(len(df), size=batch_size, replace=False)
     prompts = df.iloc[sampled_indices]['text'].to_list()
-
 
     tokens = tokenizer(
         prompts,

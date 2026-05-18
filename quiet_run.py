@@ -1,14 +1,9 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-import time
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
+from transformers import AutoModelForCausalLM, logging
 from utils import generate_random_input_ids, generate_dataset_input_ids
-import transformers
 import argparse
-import statistics
-import csv
 import nvtx
 
 parser = argparse.ArgumentParser(
