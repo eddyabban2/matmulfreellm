@@ -152,7 +152,7 @@ if __name__ == "__main__":
     MODEL_ID = "ridger/MMfreeLM-2.7B"
     
     pipeline_model = PipelineParallelMatMulFreeInference(MODEL_ID)    
-    batch_size = 2
+    batch_size = 24
     sequence_length = 10
     # Input example on Rank 0
     if int(os.environ.get("RANK", 0)) == 0:
