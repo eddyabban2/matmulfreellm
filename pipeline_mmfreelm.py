@@ -9,7 +9,7 @@ import nvtx
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from utils import generate_dataset_input_ids, create_input_ids_from_text, create_string_from_tokens
 
-class PipelineParallelMatMulFreeInference:
+class PipelineParallelMatMulFreeLM:
     def __init__(self, model_id="ridger/MMfreeLM-2.7B"):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
@@ -151,13 +151,11 @@ class PipelineParallelMatMulFreeInference:
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
     
-    pipeline_model = PipelineParallelMatMulFreeInference(MODEL_ID)   
+    pipeline_model = PipelineParallelMatMulFreeLM(MODEL_ID)   
     batch_size = 5
     sequence_length = 20
     max_new_tokens = 10
-    # Input example on Rank 0
     if int(os.environ.get("RANK", 0)) == 0:
-        # Simple dummy input token representation [Batch=1, Seq=4]
         inputs = generate_dataset_input_ids(MODEL_ID, batch_size, sequence_length)
         input_tokens = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
