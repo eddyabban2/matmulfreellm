@@ -38,7 +38,7 @@ parser.add_argument(
 parser.add_argument(
     "-n",
     "--max_new_tokens",
-    default=1,
+    default=3,
     help="sets the number of new tokens to be generated"
 )
 

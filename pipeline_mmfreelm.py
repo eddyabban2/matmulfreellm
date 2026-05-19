@@ -155,15 +155,13 @@ class PipelineParallelMatMulFreeLM:
             dist.broadcast(bs_tensor, src=0)          
             batch_sizes[mb_id] = bs_tensor.item()
 
-        def generate_token_loop(is_prefill: bool) -> None:
-
-            total_steps = num_mbs + self.world_size - 1
-
+        def generate_token_loop(is_prefill, num_tokens) -> None:
+            # total_steps = num_mbs + self.world_size - 1
+            total_steps = num_mbs*num_tokens + self.world_size
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
-                    mb_id = step - self.rank
-                    active = 0 <= mb_id < num_mbs
-
+                    mb_id = (step - self.rank) % num_mbs
+                    active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
                     logits = None
                     if active:
                         inp = current_mb_inputs.get(mb_id) if self.rank == 0 else None
@@ -200,11 +198,10 @@ class PipelineParallelMatMulFreeLM:
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
 
         with nvtx.annotate("pipelined_prefill", color="blue"):
-            generate_token_loop(is_prefill=True)
+            generate_token_loop(True, 1)
 
         with nvtx.annotate("pipelined_decode", color="green"):
-            for _ in range(max_new_tokens - 1):
-                generate_token_loop(is_prefill=False)
+            generate_token_loop(False, max_new_tokens-1)
 
         final_outputs = {}
         for mb_id in range(num_mbs):
@@ -217,15 +214,15 @@ def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
     pipeline_model = PipelineParallelMatMulFreeLM(MODEL_ID)
 
-    num_micro_batches = 3
+    num_micro_batches = 5
     batch_size_per_mb = 5
     sequence_length = 20
-    max_new_tokens = 10
+    max_new_tokens = 5
 
     micro_batches = []
     if int(os.environ.get("RANK", 0)) == 0:
         for _ in range(num_micro_batches):
-            inputs = generate_dataset_input_ids(MODEL_ID, batch_size_per_mb, sequence_length, max_new_tokens=max_new_tokens)
+            inputs = generate_dataset_input_ids(MODEL_ID, batch_size_per_mb, sequence_length)
             micro_batches.append(
                 {
                     "input_ids": inputs["input_ids"],
