@@ -43,6 +43,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "-m",
+    "--num_micro_batches",
+    default=5,
+    help="sets the number of micro batches"
+)
+
+parser.add_argument(
     "-i",
     "--iterations",
     default=1,
@@ -58,34 +65,34 @@ num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
+num_micro_batches = int(args.num_micro_batches)
 MODEL_NAME = 'ridger/MMfreeLM-2.7B'
 batch = None
 rank_string = f"[{int(os.environ.get("RANK", 0))}]: "
 print(rank_string + "pipelined quiet run is running")
 
 pipeline_model = PipelineParallelMatMulFreeLM(MODEL_NAME)  
-
+micro_batches = []
 if int(os.environ.get("RANK", 0)) == 0:
-    if args.use_dataset_prompts:
-        batch = generate_dataset_input_ids(MODEL_NAME, batch_size, seq_len)
-    else: 
-        batch = generate_random_input_ids(MODEL_NAME, batch_size, seq_len)
-    input_ids = batch["input_ids"]
-    attention_mask = batch["attention_mask"]
-else: 
-    input_ids = torch.zeros((batch_size, seq_len), dtype=torch.long) 
-    attention_mask = torch.ones((batch_size, seq_len), dtype=torch.long)
+    for _ in range(num_micro_batches):
+        inputs = generate_dataset_input_ids(MODEL_NAME, batch_size, seq_len)
+        micro_batches.append(
+            {
+                "input_ids": inputs["input_ids"],
+                "attention_mask": inputs["attention_mask"],
+            }
+        )
 dist.barrier()
 
 
 
 print(rank_string + "warmup running")
 with nvtx.annotate("warmup", color="white"):
-    pipeline_model.generate(input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens)
+    pipeline_model.generate_pipelined(micro_batches, max_new_tokens=max_new_tokens)
 print(rank_string + "warmup finished")
 with nvtx.annotate("workload", color="cyan"):
     for _ in range(num_iterations):
-        pipeline_model.generate(input_ids, attention_mask=attention_mask, max_new_tokens=max_new_tokens)
+        pipeline_model.generate_pipelined(micro_batches, max_new_tokens=max_new_tokens)
         dist.barrier()
     dist.barrier()
 dist.barrier()
