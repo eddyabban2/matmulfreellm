@@ -630,6 +630,8 @@ class FusedBitLinear(BitLinear):
         super(FusedBitLinear, self).__init__(in_features, out_features, bias=bias)
         self.cached_weights = None
         self.cached_scale = None
+    def increase_size(multiplier):
+        print("attempting to increase layer size")
 
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear At Bottom", color="red"):

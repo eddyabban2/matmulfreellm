@@ -6,12 +6,13 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import nvtx
+import random
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from utils import generate_dataset_input_ids, create_string_from_tokens
 
 
 class PipelineParallelMatMulFreeLM:
-    def __init__(self, model_id="ridger/MMfreeLM-2.7B"):
+    def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B"):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         
@@ -48,10 +49,27 @@ class PipelineParallelMatMulFreeLM:
         if self.rank == self.world_size - 1:
             self.norm = full_model.model.norm.to(self.device)
             self.lm_head = full_model.lm_head.to(self.device)
-
+        model_layers = [full_model.model.layers[i].to(self.device) for i in range(self.layer_start, self.layer_end)]
+        for _ in range(layers_multiplier-1):
+            model_layers += [full_model.model.layers[i].to(self.device) for i in range(self.layer_start, self.layer_end)]
         self.local_layers = nn.ModuleList(
-            [full_model.model.layers[i].to(self.device) for i in range(self.layer_start, self.layer_end)]
+            model_layers
         )
+        for idx, layer in enumerate(self.local_layers): 
+            if idx == 0 and self.rank == 0:
+                print("printing full layer")
+                print(layer)
+                print("printing i_proj in attention")
+                print(layer.attn.i_proj)
+                print("printing weights in a layer")
+                print(layer.attn.i_proj.weight)
+                weight_dimension_i, weight_dimension_j = layer.attn.i_proj.weight.shape
+                print(f"weight_dimension_i: {weight_dimension_i}")
+                print(f"weight_dimension_j: {weight_dimension_j}")
+                weight_dimension_i *= weight_multiplier
+                weight_dimension_j *= weight_multiplier
+                print(f"scaled weight_dimension_i: {weight_dimension_i}")
+                print(f"scaled weight_dimension_j: {weight_dimension_j}")
 
         self.past_key_values_dict = {}
         del full_model
@@ -212,12 +230,14 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    pipeline_model = PipelineParallelMatMulFreeLM(MODEL_ID)
+    layers_multiplier = 1
+    weight_multiplier = 2
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID)
 
     num_micro_batches = 5
     batch_size_per_mb = 5
     sequence_length = 20
-    max_new_tokens = 5
+    max_new_tokens = 0
 
     micro_batches = []
     if int(os.environ.get("RANK", 0)) == 0:
@@ -245,6 +265,7 @@ def main():
                 print(f"\n--- Item {i+1} ---")
                 print(f"Input Text:    {input_text}")
                 print(f"Output Text:   {output_text}")
+                print(f"Output Tensor: {generated_tensor[i]}")
 
     dist.destroy_process_group()
 
