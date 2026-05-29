@@ -39,9 +39,16 @@ parser.add_argument(
 
 parser.add_argument(
     "-w", 
-    "--weight multiplier ",
-    default=32,
-    help="sets the number of micro batches"
+    "--weight_multiplier",
+    default=1,
+    help="sets the number of we multiply the number of weights in each layer by"
+)
+
+parser.add_argument(
+    "-l", 
+    "--layer_multiplier",
+    default=1,
+    help="sets the number  we multiply the number of layers by"
 )
 
 parser.add_argument( 
@@ -76,36 +83,6 @@ logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-def profile_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, model_name='ridger/MMfreeLM-2.7B'):
-    # create random input tokens
-    batch = generate_random_input_ids(model_name, batch_size, seq_len)
-    input_ids = batch["input_ids"].cuda()
-    attention_mask = batch["attention_mask"].cuda()
-
-    # run a warm up generate 
-    _ = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_length=max_length,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-    
-    # profile generate 
-    with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        with_flops=True, record_shapes=True, profile_memory=True
-    ) as prof:
-        for _ in range(num_iterations):
-            _ = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    top_p=0.4,
-                    temperature=0.6
-                )
-    return prof
 
 def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
@@ -330,16 +307,20 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
-def create_csv_data(sequence_length, iters, max_new_tokens):
-    device = torch.cuda.get_device_name(torch.cuda.current_device())
-    # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-2.7B' ]
-    print("Collecting Data to be used in a CSV")
+def create_csv_data(
+        sequence_length, 
+        max_new_tokens, 
+        iters, 
+        min_batch_power, 
+        max_batch_power, 
+        count_micro_batches, 
+        weight_multiplier, 
+        layer_multiplier):
+
     first_row = True
-    min_batch_power = int(args.min_batch_power)
-    max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    rank = int(os.environ.get("RANK", 0))
+    filename =  f'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}Rank:{rank}.csv'.format(date=datetime.now())
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         for model_name in models:
@@ -380,15 +361,17 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
         print(f"Data written to {filename}")
 
 def main():
-    if args.fixed_point:
-        print("fixed point not yet supported")
-        quit()
-
     sequence_length=int(args.sequence_length)
-    iters=int(args.iterations)
     max_new_tokens=int(args.max_new_tokens)
+    iters=int(args.iterations)
+    min_batch_power=int(args.min_batch_power)
+    max_batch_power=int(args.max_batch_power)
+    count_micro_batches=int(args.micro_batches)
+    weight_multiplier=float(args.weight_multiplier)
+    layer_multiplier=float(args.layer_multiplier)
+
     
-    create_csv_data(sequence_length, iters, max_new_tokens)
+    create_csv_data()
 
 if __name__ == "__main__":
     main()
