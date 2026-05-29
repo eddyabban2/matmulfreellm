@@ -6,20 +6,21 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import nvtx
-import random
+import copy 
+from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from utils import generate_dataset_input_ids, create_string_from_tokens
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class PipelineParallelMatMulFreeLM:
-    def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B"):
+    def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
+            timeout = 1000
             torch.cuda.set_device(self.rank)
-            
+            dist.init_process_group(backend="nccl", device_id=torch.device(f"cuda:{self.rank}"), timeout=timedelta(seconds=timeout)) 
         self.device = torch.device(f"cuda:{self.rank}")
 
         self.config = HGRNBitConfig.from_pretrained(model_id)
@@ -31,49 +32,69 @@ class PipelineParallelMatMulFreeLM:
         self.layer_start = self.rank * layers_per_gpu + min(self.rank, remainder)
         self.layer_end = self.layer_start + layers_per_gpu + (1 if self.rank < remainder else 0)
         
-        # print(f"Rank {self.rank}: Managing layers {self.layer_start} to {self.layer_end - 1}")
-        
         full_model = HGRNBitForCausalLM.from_pretrained(
             model_id,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
         )
 
-        self.embed_tokens = None
+        self.embeddings = None
         self.norm = None
         self.lm_head = None
         
         if self.rank == 0:
-            self.embed_tokens = full_model.model.embeddings.to(self.device)
-            
+            if weight_multiplier == 1: 
+                self.embeddings = full_model.model.embeddings.to(self.device)
+            else: 
+                hidden_size = int(2560*weight_multiplier)
+                self.embeddings = nn.Embedding(
+                    num_embeddings=full_model.vocab_size, 
+                    embedding_dim=hidden_size, 
+                    padding_idx=full_model.model.padding_idx, 
+                    device=self.device)
+                nn.init.uniform_(self.embeddings.weight, a=-1, b=1)
+                self.embeddings.to(torch.float16)
         if self.rank == self.world_size - 1:
             self.norm = full_model.model.norm.to(self.device)
+            self.norm.increase_size(weight_multiplier)
             self.lm_head = full_model.lm_head.to(self.device)
-        model_layers = [full_model.model.layers[i].to(self.device) for i in range(self.layer_start, self.layer_end)]
-        for _ in range(layers_multiplier-1):
-            model_layers += [full_model.model.layers[i].to(self.device) for i in range(self.layer_start, self.layer_end)]
+            self.lm_head.increase_size(weight_multiplier, 1)
+        model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
+                for i in range(self.layer_start, self.layer_end)]
+        for _ in range(layers_multiplier - 1):
+            model_layers += [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
+                            for i in range(self.layer_start, self.layer_end)]
         self.local_layers = nn.ModuleList(
             model_layers
         )
-        for idx, layer in enumerate(self.local_layers): 
-            if idx == 0 and self.rank == 0:
-                print("printing full layer")
-                print(layer)
-                print("printing i_proj in attention")
-                print(layer.attn.i_proj)
-                print("printing weights in a layer")
-                print(layer.attn.i_proj.weight)
-                weight_dimension_i, weight_dimension_j = layer.attn.i_proj.weight.shape
-                print(f"weight_dimension_i: {weight_dimension_i}")
-                print(f"weight_dimension_j: {weight_dimension_j}")
-                weight_dimension_i *= weight_multiplier
-                weight_dimension_j *= weight_multiplier
-                print(f"scaled weight_dimension_i: {weight_dimension_i}")
-                print(f"scaled weight_dimension_j: {weight_dimension_j}")
+        if weight_multiplier != 1: 
+            for idx, layer in enumerate(self.local_layers): 
+                layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier)
 
+                layer.attn_norm.increase_size(weight_multiplier)
+                layer.mlp_norm.increase_size(weight_multiplier)
         self.past_key_values_dict = {}
         del full_model
         torch.cuda.empty_cache()
+
+        if print_model_config: 
+            # embedding 
+            if self.embeddings != None:
+                print(f"[rank{self.rank}] Embedding Layer: {self.embeddings}")
+            # layers 
+            for idx, layer in enumerate(self.local_layers):
+                print(f"[rank{self.rank}] Local Layer [{idx}]: {layer}")
+            # norm
+            if self.norm != None: 
+                print(f"[rank{self.rank}] norm: {self.norm}")
+            # lm head 
+            if self.norm != None: 
+                print(f"[rank{self.rank}] norm: {self.lm_head}")
 
     def clear_cache(self):
         self.past_key_values_dict = {}
@@ -83,7 +104,7 @@ class PipelineParallelMatMulFreeLM:
         with nvtx.annotate(f"micro batch: {mb_id}", color="orange"):
             if self.rank == 0:
                 assert input_ids is not None, "Rank 0 requires input_ids"
-                hidden_states = self.embed_tokens(input_ids)
+                hidden_states = self.embeddings(input_ids)
             else:
                 shape_tensor = torch.zeros(3, dtype=torch.int64, device=self.device)
                 dist.recv(shape_tensor, src=self.rank - 1)
@@ -95,7 +116,6 @@ class PipelineParallelMatMulFreeLM:
 
                 mask_shape = torch.zeros(2, dtype=torch.int64, device=self.device)
                 dist.recv(mask_shape, src=self.rank - 1)
-
                 attention_mask = torch.zeros(
                     tuple(mask_shape.tolist()), dtype=torch.long, device=self.device
                 )
@@ -107,7 +127,7 @@ class PipelineParallelMatMulFreeLM:
                 )
             mb_past_kvs = self.past_key_values_dict.get(mb_id, None)
             new_past_key_values = []
-
+            
             for idx, layer in enumerate(self.local_layers):
                 layer_past = mb_past_kvs[idx] if mb_past_kvs is not None else None
                 outputs = layer(
@@ -120,14 +140,12 @@ class PipelineParallelMatMulFreeLM:
                 )
                 hidden_states = outputs[0] if isinstance(outputs, tuple) else outputs
                 new_past_key_values.append(outputs[1])
-
             self.past_key_values_dict[mb_id] = new_past_key_values
 
             if self.rank < self.world_size - 1:
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.device)
                 dist.send(shape_tensor, dst=self.rank + 1)
                 dist.send(hidden_states, dst=self.rank + 1)
-
                 if attention_mask is None:
                     attention_mask = torch.ones(
                         (hidden_states.shape[0], hidden_states.shape[1]),
@@ -176,6 +194,7 @@ class PipelineParallelMatMulFreeLM:
         def generate_token_loop(is_prefill, num_tokens) -> None:
             # total_steps = num_mbs + self.world_size - 1
             total_steps = num_mbs*num_tokens + self.world_size
+            print(f"running for {total_steps}")
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
@@ -212,6 +231,7 @@ class PipelineParallelMatMulFreeLM:
                         dist.broadcast(next_token, src=self.world_size - 1)
 
                         if self.rank == 0:
+                            print(f"step: {step} broadcasting for mb: {broadcasting_mb_id}")
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
 
@@ -220,7 +240,7 @@ class PipelineParallelMatMulFreeLM:
 
         with nvtx.annotate("pipelined_decode", color="green"):
             generate_token_loop(False, max_new_tokens-1)
-
+        print(f"all generated output_tokens: {all_generated_tokens}")
         final_outputs = {}
         for mb_id in range(num_mbs):
             if all_generated_tokens[mb_id]:
@@ -230,14 +250,14 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
-    weight_multiplier = 2
-    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID)
+    layers_multiplier = 2
+    weight_multiplier = 1.11
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=False)
 
-    num_micro_batches = 5
+    num_micro_batches = 7
     batch_size_per_mb = 5
     sequence_length = 20
-    max_new_tokens = 0
+    max_new_tokens = 8
 
     micro_batches = []
     if int(os.environ.get("RANK", 0)) == 0:
@@ -251,8 +271,10 @@ def main():
             )
     print("generated input tokens")
     dist.barrier()
+    print("attempting to run pipeline")
 
     outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=max_new_tokens)
+    print(f"Outputs of Model: {outputs}")
     print("tokens generated")
 
     if int(os.environ.get("RANK", 0)) == 0:

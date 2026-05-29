@@ -178,6 +178,8 @@ def _layer_norm_fwd(
             assert residual.stride(-1) == 1
             assert residual.shape == (M, N)
         if weight is not None:
+            # print(f"layer norm weight shape: {weight.shape}")
+            # print(f"layer norm N value: {(N,)}")
             assert weight.shape == (N,)
             assert weight.stride(-1) == 1
         if bias is not None:
@@ -612,6 +614,11 @@ class RMSNorm(nn.Module):
         s += f", eps={self.eps}"
         s += ")"
         return s
+
+    def increase_size(self, multiplier):
+        self.hidden_size *= multiplier
+        self.hidden_size = int(self.hidden_size)
+        self.weight = nn.Parameter(torch.rand(int(self.hidden_size), device=self.weight.device))
 
     def forward(self, x, residual=None, prenorm=False, residual_in_fp32=False):
         return rms_norm_fn(

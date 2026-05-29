@@ -630,8 +630,19 @@ class FusedBitLinear(BitLinear):
         super(FusedBitLinear, self).__init__(in_features, out_features, bias=bias)
         self.cached_weights = None
         self.cached_scale = None
-    def increase_size(multiplier):
-        print("attempting to increase layer size")
+
+    def increase_size(self, in_multiplier, out_multiplier):
+        weight_dimension_out, weight_dimension_in = self.weight.shape
+        weight_dimension_in *= in_multiplier
+        weight_dimension_out *= out_multiplier
+        device = self.weight.device 
+        dtype = self.weight.dtype
+        del self.weight
+        self.cached_weights = torch.randint(-1, 2, (int(weight_dimension_out), int(weight_dimension_in)), device=device).to(dtype)
+        self.cached_scale = 0.412
+        self.in_features = int(weight_dimension_in)
+        self.out_features = int(weight_dimension_out)
+        self.norm.increase_size(in_multiplier)
 
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear At Bottom", color="red"):
