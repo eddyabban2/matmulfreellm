@@ -84,7 +84,7 @@ logging.disable_default_handler()
 logging.disable_propagation()
 
 
-def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
+def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, max_new_tokens, row, num_micro_batches, rank, use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
     
     results = {
@@ -97,14 +97,20 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
             'energy_per_iteration_joules': [],
             'joules_per_token': []
         }
-    batch = None
-    if use_dataset_prompts:
-        batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
-    else:    
-        batch = generate_random_input_ids(model_name, batch_size, seq_len)
-
-    input_ids = batch["input_ids"].cuda()
-    attention_mask = batch["attention_mask"].cuda()
+    micro_batches = []
+    generate_function = generate_random_input_ids
+    if use_dataset_prompts: 
+        generate_function = generate_dataset_input_ids
+    if rank == 0: 
+        for _ in range(num_micro_batches):
+            inputs = generate_function(MODEL_ID, batch_size, seq_len)
+            micro_batches.append(
+                {
+                    "input_ids": inputs["input_ids"],
+                    "attention_mask": inputs["attention_mask"],
+                })
+    
+    dist.barrier()
 
     power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
     monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
@@ -214,98 +220,7 @@ def first_token_time(model, batch_size, seq_len, num_iterations, model_name='rid
         times.append(generation_time)
     return times
 
-def profile_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
-    # create random input tokens
-    batch = generate_random_input_ids(model_name, batch_size, seq_len)
-    input_ids = batch["input_ids"].cuda()
-    attention_mask = batch["attention_mask"].cuda()
 
-    # run a warm up generate 
-    _ = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-    
-    # profile generate 
-    with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        with_flops=True, record_shapes=True, profile_memory=True
-    ) as prof:
-        for _ in range(num_iterations):
-            _ = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    top_p=0.4,
-                    temperature=0.6
-                )
-    events = prof.key_averages()
-    table_string = prof.key_averages().table().split('\n')
-    cpu_time = table_string[-3].split()[4]
-    if cpu_time.endswith('ms'):
-        cpu_time = float(cpu_time[:-2]) / 1e3
-    else:
-        cpu_time = float(cpu_time[:-1])
-    cuda_time = table_string[-2].split()[4]
-    if cuda_time.endswith('ms'):
-        cuda_time = float(cuda_time[:-2]) / 1e3
-    else:
-        cuda_time = float(cuda_time[:-1])
-    flops = sum(e.flops for e in events) / float(row['run_time_seconds'])
-    row["FLOPS"] = flops
-    row ["CPU_time_seconds"] = cpu_time
-    row["CUDA_time_seconds"] = cuda_time
-
-def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
-    # create random input tokens
-    batch = generate_random_input_ids(model_name, batch_size, seq_len)
-    input_ids = batch["input_ids"].cuda()
-    attention_mask = batch["attention_mask"].cuda()
-
-    # run a warm up generate 
-    _ = model.generate(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-    
-    # profile generate 
-    power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
-    monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
-    window_key = f"Batch Size {batch_size} Seq Len {seq_len}"
-    start_time = time.time()
-    monitor.begin_window(window_key, sync_execution=True)
-    for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
-    mes = monitor.end_window(window_key, sync_execution=True)
-    end_time = time.time()
-    timeline = power_monitor.get_power_timeline(
-        power_domain="device_instant",  # or "device_average" or "memory_average"
-        gpu_index=0,  # specify GPU, or None for all GPUs
-        start_time=start_time,
-        end_time=end_time
-    )
-    for gpu_idx, data in timeline.items():
-        powers = [power_watts for timestamp, power_watts in data]
-        row['average_power_watts'] = sum(powers) / len(powers)
-        row['max_power_watts'] = max(powers)
-        row['min_power_watts'] = min(powers)
-    row['total_energy_joules'] = mes.gpu_energy[0]
-    row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
-    row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
 def create_csv_data(
         sequence_length, 
@@ -321,43 +236,28 @@ def create_csv_data(
     from datetime import datetime
     rank = int(os.environ.get("RANK", 0))
     filename =  f'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}Rank:{rank}.csv'.format(date=datetime.now())
+    pipelined_model = PipelineParallelMatMulFreeLM(MODEL_NAME, weight_multiplier=weight_multiplier, layer_multiplier=layer_multiplier)  
+    device = pipelined_model.device
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        for model_name in models:
-            row = {'device': device, 'model': model_name}
-            print(f"Collecting data for model: {model_name}")
-            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-            for batch_power in range(min_batch_power, max_batch_power):
-                batch_size = 2**batch_power
-                row['batch size'] = batch_size
-                print(f"\tCollecting data for batch size: {batch_size}")
-                print(f"\t\tRunning Benchmarks...")
-                # start_time = time.time()
-                # benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                # end_time = time.time()
-                # print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+        row = {'device': device, 'model': model_name}
+        print(f"Collecting data for model: {model_name}")
+        for batch_power in range(min_batch_power, max_batch_power):
+            batch_size = 2**batch_power
+            row['batch size'] = batch_size
+            print(f"\tCollecting data for batch size: {batch_size}")
+            print(f"\t\tRunning Benchmarks...")
 
-                start_time = time.time()
-                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                end_time = time.time()
-                print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+            tokens_per_second = []
+            runtime = []
+            max_power_watts = []
+            min_power_watts
 
-                # print(f"\t\tCollecting time to first token data...")
-                # start_time = time.time()
-                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=True))
-                # end_time = time.time()
-                # print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
-
-                # print("\t\t Collecting Power data")
-                # start_time = time.time()
-                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                # end_time = time.time()
-                # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
-                if(first_row):
-                    csvwriter = csv.DictWriter(csvfile, row.keys())
-                    csvwriter.writeheader()
-                    first_row = False
-                csvwriter.writerow(row) 
+            if(first_row):
+                csvwriter = csv.DictWriter(csvfile, row.keys())
+                csvwriter.writeheader()
+                first_row = False
+            csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
 def main():
