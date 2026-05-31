@@ -2,7 +2,7 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    python generate_csv.py -s 32 --max_new_tokens 32 -i 15 --min_batch_power 0 --max_batch_power 12
+    torchrun --nproc_per_node=2 pipeline_mmfreelm.py 
 """
 
 import os
@@ -240,18 +240,17 @@ def create_csv_data(
     device = pipelined_model.device
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        row = {'device': device, 'model': model_name}
-        print(f"Collecting data for model: {model_name}")
+        original_hidden_layer_size = 2560
+        original_num_layers = 32
+        row = {
+            'device': device, 
+            'Hiden Layer Size': original_hidden_layer_size*weight_multiplier, 
+            'Number of Layers': original_num_layers*layer_multiplier}
         for batch_power in range(min_batch_power, max_batch_power):
             batch_size = 2**batch_power
-            row['batch size'] = batch_size
+            row['Batch Size'] = batch_size
             print(f"\tCollecting data for batch size: {batch_size}")
             print(f"\t\tRunning Benchmarks...")
-
-            tokens_per_second = []
-            runtime = []
-            max_power_watts = []
-            min_power_watts
 
             if(first_row):
                 csvwriter = csv.DictWriter(csvfile, row.keys())
@@ -271,7 +270,7 @@ def main():
     layer_multiplier=float(args.layer_multiplier)
 
     
-    create_csv_data()
+    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layer_multiplier)
 
 if __name__ == "__main__":
     main()

@@ -11,6 +11,9 @@ from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
+os.environ["OMP_NUM_THREADS"] = "2"
+OMP_NUM_THREADS=1
 
 class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
@@ -18,7 +21,7 @@ class PipelineParallelMatMulFreeLM:
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         
         if not dist.is_initialized():
-            timeout = 1000
+            timeout = 20
             torch.cuda.set_device(self.rank)
             dist.init_process_group(backend="nccl", device_id=torch.device(f"cuda:{self.rank}"), timeout=timedelta(seconds=timeout)) 
         self.device = torch.device(f"cuda:{self.rank}")
@@ -56,9 +59,10 @@ class PipelineParallelMatMulFreeLM:
                 self.embeddings.to(torch.float16)
         if self.rank == self.world_size - 1:
             self.norm = full_model.model.norm.to(self.device)
-            self.norm.increase_size(weight_multiplier)
             self.lm_head = full_model.lm_head.to(self.device)
-            self.lm_head.increase_size(weight_multiplier, 1)
+            if weight_multiplier != 1:
+                self.norm.increase_size(weight_multiplier)
+                self.lm_head.increase_size(weight_multiplier, 1)
         model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
                 for i in range(self.layer_start, self.layer_end)]
         for _ in range(layers_multiplier - 1):
@@ -192,15 +196,19 @@ class PipelineParallelMatMulFreeLM:
             batch_sizes[mb_id] = bs_tensor.item()
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
-            # total_steps = num_mbs + self.world_size - 1
-            total_steps = num_mbs*num_tokens + self.world_size
-            print(f"running for {total_steps}")
+            # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
+            total_steps = num_mbs * num_tokens + self.world_size - 1
+            # print(f"running for {total_steps}")
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
+                    print(f"[{self.rank}] during step: {step } self.rank <=  step : {self.rank <=  step}")
+                    print(f"[{self.rank}] during step: {step } step < (num_mbs*num_tokens + self.rank : {step < (num_mbs*num_tokens + self.rank)}")
+
                     logits = None
                     if active:
+                        print(f"[{self.rank}] was active during  {step}")
                         inp = current_mb_inputs.get(mb_id) if self.rank == 0 else None
                         mask = current_mb_masks.get(mb_id) if (self.rank == 0 and is_prefill) else None
                         logits = self.pipelined_forward_step(
@@ -210,13 +218,14 @@ class PipelineParallelMatMulFreeLM:
                             is_prefill=is_prefill,
                         )
 
-                    broadcasting_mb_id = step - (self.world_size - 1)
-                    bc_active = 0 <= broadcasting_mb_id < num_mbs
-
+                    broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
+                    # bc_active = self.rank == (self.world_size) -1  and step - self.world_size + 2
+                    # bc_active = (self.rank == self.world_size - 1) and (step >= self.world_size - 1)
+                    bc_active = step >= self.world_size - 1
                     if bc_active:
+                        print(f"[{self.rank}] broadcasting final token for: {broadcasting_mb_id} during step {step}")
                         mb_bs = batch_sizes[broadcasting_mb_id]
                         next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.device)
-
                         if self.rank == self.world_size - 1:
                             assert logits is not None, (
                                 f"Rank {self.rank}: expected logits for mb {broadcasting_mb_id} at step {step}"
@@ -250,8 +259,8 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 2
-    weight_multiplier = 1.11
+    layers_multiplier = 1
+    weight_multiplier = 1
     pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=False)
 
     num_micro_batches = 7
