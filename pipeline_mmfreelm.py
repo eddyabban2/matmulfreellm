@@ -19,11 +19,16 @@ class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
-        
+        print("attempting to initalize")
         if not dist.is_initialized():
-            timeout = 20
+            timeout = timedelta(seconds=20)
+            print("set timeout")
             torch.cuda.set_device(self.rank)
-            dist.init_process_group(backend="nccl", device_id=torch.device(f"cuda:{self.rank}"), timeout=timedelta(seconds=timeout)) 
+            print("set device")
+            dist.init_process_group(backend="nccl", device_id=self.rank, timeout=timeout) 
+            print("initalizing group")
+        print('initalized')
+        dist.barrier()
         self.device = torch.device(f"cuda:{self.rank}")
 
         self.config = HGRNBitConfig.from_pretrained(model_id)
@@ -198,17 +203,13 @@ class PipelineParallelMatMulFreeLM:
         def generate_token_loop(is_prefill, num_tokens) -> None:
             # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
             total_steps = num_mbs * num_tokens + self.world_size - 1
-            # print(f"running for {total_steps}")
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
-                    print(f"[{self.rank}] during step: {step } self.rank <=  step : {self.rank <=  step}")
-                    print(f"[{self.rank}] during step: {step } step < (num_mbs*num_tokens + self.rank : {step < (num_mbs*num_tokens + self.rank)}")
 
                     logits = None
                     if active:
-                        print(f"[{self.rank}] was active during  {step}")
                         inp = current_mb_inputs.get(mb_id) if self.rank == 0 else None
                         mask = current_mb_masks.get(mb_id) if (self.rank == 0 and is_prefill) else None
                         logits = self.pipelined_forward_step(
@@ -219,11 +220,9 @@ class PipelineParallelMatMulFreeLM:
                         )
 
                     broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
-                    # bc_active = self.rank == (self.world_size) -1  and step - self.world_size + 2
-                    # bc_active = (self.rank == self.world_size - 1) and (step >= self.world_size - 1)
                     bc_active = step >= self.world_size - 1
                     if bc_active:
-                        print(f"[{self.rank}] broadcasting final token for: {broadcasting_mb_id} during step {step}")
+                        
                         mb_bs = batch_sizes[broadcasting_mb_id]
                         next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.device)
                         if self.rank == self.world_size - 1:
@@ -240,7 +239,6 @@ class PipelineParallelMatMulFreeLM:
                         dist.broadcast(next_token, src=self.world_size - 1)
 
                         if self.rank == 0:
-                            print(f"step: {step} broadcasting for mb: {broadcasting_mb_id}")
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
 
@@ -249,7 +247,6 @@ class PipelineParallelMatMulFreeLM:
 
         with nvtx.annotate("pipelined_decode", color="green"):
             generate_token_loop(False, max_new_tokens-1)
-        print(f"all generated output_tokens: {all_generated_tokens}")
         final_outputs = {}
         for mb_id in range(num_mbs):
             if all_generated_tokens[mb_id]:
@@ -259,8 +256,8 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
-    weight_multiplier = 1
+    layers_multiplier = 2
+    weight_multiplier = 1.5
     pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=False)
 
     num_micro_batches = 7

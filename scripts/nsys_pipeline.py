@@ -15,6 +15,19 @@ parser.add_argument(
     help="sets the sequence length of input tokens"
 )
 
+parser.add_argument(
+    "-l", 
+    "--layers_multiplier",
+    default="1",
+    help="set the amount of times to multiply the number of layers"
+)
+parser.add_argument(
+    "-w", 
+    "--weight_multiplier",
+    default="1",
+    help="set the amount of times to multiply the number of weights in each layer"
+)
+
 args = parser.parse_args()
 metric_profile = args.profile
 
@@ -22,16 +35,18 @@ nsys_path = subprocess.check_output(["which", "nsys"]).decode('ascii').strip()
 os.chdir('../')
 print(f"Extracted nsys path: {nsys_path}")
 
-def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+def create_report_name(bs, new_tokens, seq_len, weight_multiplier, layers_multiplier, model_name='ridger/MMfreeLM-2.7B'):
     model_name = model_name.replace("/", "-")
-    return  os.getcwd() + "/outputs/nsys_runs/pipelined" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    return  os.getcwd() + "/outputs/nsys_runs/pipelined" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "layers_multiplier" + str(layers_multiplier) + "weight_multiplier" + weight_multiplier
 
 batch_size = 5
 seq_len = 5 
 new_tokens = 5 
 gpu_count = 2 
+layers_multiplier = args.layers_multiplier
+weight_multiplier = args.weight_multiplier
 
-report_name = create_report_name(batch_size, new_tokens, seq_len)
+report_name = create_report_name(batch_size, new_tokens, seq_len, weight_multiplier, layers_multiplier)
 print(report_name)
 command = [
     nsys_path, "profile",
@@ -50,7 +65,9 @@ command = [
     "-b", str(batch_size),
     "-i", "1", 
     "-s", str(seq_len), 
-    "-n", str(new_tokens)
+    "-n", str(new_tokens), 
+    "-l", str(layers_multiplier),
+    "-w", str(weight_multiplier)
 ]
 
 print(f"running command {' '.join(command)}")

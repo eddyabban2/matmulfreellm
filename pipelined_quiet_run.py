@@ -56,6 +56,19 @@ parser.add_argument(
     help="Determines the number of iterations to benchmark for"
 )
 
+parser.add_argument(
+    "-l", 
+    "--layers_multiplier",
+    default=1,
+    help="set the amount of times to multiply the number of layers"
+)
+parser.add_argument(
+    "-w", 
+    "--weight_multiplier",
+    default=1,
+    help="set the amount of times to multiply the number of weights in each layer"
+)
+
 args = parser.parse_args()
 logging.set_verbosity_error()
 logging.disable_default_handler()
@@ -66,12 +79,13 @@ batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
 num_micro_batches = int(args.num_micro_batches)
+weight_multiplier = int(args.weight_multiplier)
+layers_multiplier = int(args.layers_multiplier)
 MODEL_NAME = 'ridger/MMfreeLM-2.7B'
 batch = None
 rank_string = f"[{int(os.environ.get("RANK", 0))}]: "
 print(rank_string + "pipelined quiet run is running")
-
-pipeline_model = PipelineParallelMatMulFreeLM(MODEL_NAME)  
+pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier)  
 micro_batches = []
 if int(os.environ.get("RANK", 0)) == 0:
     for _ in range(num_micro_batches):
@@ -83,8 +97,6 @@ if int(os.environ.get("RANK", 0)) == 0:
             }
         )
 dist.barrier()
-
-
 
 print(rank_string + "warmup running")
 with nvtx.annotate("warmup", color="white"):
