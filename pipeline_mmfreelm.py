@@ -178,7 +178,7 @@ class PipelineParallelMatMulFreeLM:
             return logits
 
     @torch.inference_mode()
-    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75):
+    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=False):
         self.clear_cache()
 
         num_mbs_tensor = torch.tensor(
@@ -248,12 +248,15 @@ class PipelineParallelMatMulFreeLM:
                         if self.rank == 0:
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
+        if single_call: 
+            generate_token_loop(False, max_new_tokens)
+        else:
+            with nvtx.annotate("pipelined_prefill", color="blue"):
+                generate_token_loop(True, 1)
 
-        with nvtx.annotate("pipelined_prefill", color="blue"):
-            generate_token_loop(True, 1)
+            with nvtx.annotate("pipelined_decode", color="green"):
+                generate_token_loop(False, max_new_tokens-1)
 
-        with nvtx.annotate("pipelined_decode", color="green"):
-            generate_token_loop(False, max_new_tokens-1)
         final_outputs = {}
         for mb_id in range(num_mbs):
             if all_generated_tokens[mb_id]:
