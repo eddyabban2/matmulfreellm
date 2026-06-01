@@ -2,7 +2,7 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    torchrun --nproc_per_node=2 pipeline_mmfreelm.py 
+    torchrun --nproc_per_node=2 pipelined_performance_eval.py
 """
 
 import os
@@ -11,12 +11,13 @@ import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
+from utils import generate_random_input_ids, generate_dataset_input_ids
+from pipeline_mmfreelm import PipelineParallelMatMulFreeLM
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -46,7 +47,7 @@ parser.add_argument(
 
 parser.add_argument(
     "-l", 
-    "--layer_multiplier",
+    "--layers_multiplier",
     default=1,
     help="sets the number  we multiply the number of layers by"
 )
@@ -230,13 +231,13 @@ def create_csv_data(
         max_batch_power, 
         count_micro_batches, 
         weight_multiplier, 
-        layer_multiplier):
+        layers_multiplier):
 
     first_row = True
-    from datetime import datetime
     rank = int(os.environ.get("RANK", 0))
-    filename =  f'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}Rank:{rank}.csv'.format(date=datetime.now())
-    pipelined_model = PipelineParallelMatMulFreeLM(MODEL_NAME, weight_multiplier=weight_multiplier, layer_multiplier=layer_multiplier)  
+    from datetime import datetime
+    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now())
+    pipelined_model = PipelineParallelMatMulFreeLM(weight_multiplier=weight_multiplier, layers_multiplier=layers_multiplier)  
     device = pipelined_model.device
     with open(filename, 'w') as csvfile:
         csvwriter = None  
@@ -245,7 +246,7 @@ def create_csv_data(
         row = {
             'device': device, 
             'Hiden Layer Size': original_hidden_layer_size*weight_multiplier, 
-            'Number of Layers': original_num_layers*layer_multiplier}
+            'Number of Layers': original_num_layers*layers_multiplier}
         for batch_power in range(min_batch_power, max_batch_power):
             batch_size = 2**batch_power
             row['Batch Size'] = batch_size
@@ -267,10 +268,9 @@ def main():
     max_batch_power=int(args.max_batch_power)
     count_micro_batches=int(args.micro_batches)
     weight_multiplier=float(args.weight_multiplier)
-    layer_multiplier=float(args.layer_multiplier)
+    layers_multiplier=float(args.layers_multiplier)
 
-    
-    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layer_multiplier)
+    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier)
 
 if __name__ == "__main__":
     main()

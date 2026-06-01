@@ -9,6 +9,7 @@ import nvtx
 import copy 
 from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+import random
 from utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
@@ -71,11 +72,15 @@ class PipelineParallelMatMulFreeLM:
             if weight_multiplier != 1:
                 self.norm.increase_size(weight_multiplier)
                 self.lm_head.increase_size(weight_multiplier, 1)
-        model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
+        model_layers = []
+        if layers_multiplier == 1:
+            model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
                 for i in range(self.layer_start, self.layer_end)]
-        for _ in range(layers_multiplier - 1):
-            model_layers += [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
-                            for i in range(self.layer_start, self.layer_end)]
+        else: 
+            layer_count = int(layers_multiplier*(self.layer_end-self.layer_start))
+            for _ in range(layer_count):
+                random_layer_index = random.randint(self.layer_start, self.layer_end-1)
+                model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]).to(self.device))
         self.local_layers = nn.ModuleList(
             model_layers
         )
@@ -258,7 +263,7 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
+    layers_multiplier = 1.5
     weight_multiplier = 1
     print_model_config = True
     pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=print_model_config)
