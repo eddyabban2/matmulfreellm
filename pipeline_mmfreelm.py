@@ -13,6 +13,7 @@ from utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
 os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["NCCL_IB_DISABLE"] = "1"
 OMP_NUM_THREADS=1
 
 import torch.multiprocessing as mp
@@ -24,16 +25,12 @@ class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
-        print("attempting to initalize")
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         if not dist.is_initialized():
             timeout = timedelta(seconds=1200)
-            print("set timeout")
-            torch.cuda.set_device(self.rank)
-            device_id = torch.device(f"cuda:{self.rank}")
-            print("set device")
-            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=device_id, timeout=timeout) 
-            print("initalizing group")
-        print('initalized')
+            torch.cuda.set_device(self.local_rank)
+            self.device = torch.device(f"cuda:{self.local_rank}")
+            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
         dist.barrier()
         self.device = torch.device(f"cuda:{self.rank}")
 
