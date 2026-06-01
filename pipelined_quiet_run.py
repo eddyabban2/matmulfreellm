@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 import argparse
 import nvtx
-from transformers import AutoModelForCausalLM, logging
+from transformers import logging
 from utils import generate_random_input_ids, generate_dataset_input_ids
 from pipeline_mmfreelm import PipelineParallelMatMulFreeLM
 
@@ -87,9 +87,10 @@ rank_string = f"[{int(os.environ.get("RANK", 0))}]: "
 print(rank_string + "pipelined quiet run is running")
 pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier)  
 micro_batches = []
+generate_input_ids = generate_dataset_input_ids if args.use_dataset_prompts else generate_random_input_ids
 if int(os.environ.get("RANK", 0)) == 0:
     for _ in range(num_micro_batches):
-        inputs = generate_dataset_input_ids(MODEL_NAME, batch_size, seq_len)
+        inputs = generate_input_ids(MODEL_NAME, batch_size, seq_len)
         micro_batches.append(
             {
                 "input_ids": inputs["input_ids"],

@@ -99,14 +99,13 @@ class PipelineParallelMatMulFreeLM:
             if self.embeddings != None:
                 print(f"[rank{self.rank}] Embedding Layer: {self.embeddings}")
             # layers 
-            for idx, layer in enumerate(self.local_layers):
-                print(f"[rank{self.rank}] Local Layer [{idx}]: {layer}")
+            print(f"[rank{self.rank}] Local Layers: {self.local_layers}")
             # norm
             if self.norm != None: 
                 print(f"[rank{self.rank}] norm: {self.norm}")
             # lm head 
-            if self.norm != None: 
-                print(f"[rank{self.rank}] norm: {self.lm_head}")
+            if self.lm_head != None: 
+                print(f"[rank{self.rank}] lm_head: {self.lm_head}")
 
     def clear_cache(self):
         self.past_key_values_dict = {}
@@ -259,9 +258,10 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 2
-    weight_multiplier = 1.5
-    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=False)
+    layers_multiplier = 1
+    weight_multiplier = 1
+    print_model_config = True
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=print_model_config)
 
     num_micro_batches = 7
     batch_size_per_mb = 5
