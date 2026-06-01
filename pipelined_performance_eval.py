@@ -27,7 +27,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-s", 
     "--sequence_length",
-    default=100,
+    default=5,
     help="sets the sequence length of input tokens"
 )
 
@@ -42,14 +42,14 @@ parser.add_argument(
 parser.add_argument(
     "-w", 
     "--weight_multiplier",
-    default=2,
+    default=0.5,
     help="sets the number of we multiply the number of weights in each layer by"
 )
 
 parser.add_argument(
     "-l", 
     "--layers_multiplier",
-    default=1,
+    default=0.5,
     help="sets the number  we multiply the number of layers by"
 )
 
@@ -62,7 +62,7 @@ parser.add_argument(
 parser.add_argument(
     "-i", 
     "--iterations",
-    default=5,
+    default=1,
     help="Determines the number of iterations to benchmark for"
 )
 
@@ -75,7 +75,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_batch_power", 
-    default=8,
+    default=3,
     help="stores the maximum batch power to go up to when profiling",
 )
 
@@ -94,11 +94,13 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
             'generation_time': [],
             'average_power_watts': [],
             'max_power_watts': [],
-            'min_power_watts': [],
+            'min_power_watts': [], 
             'total_energy_joules': [],
-            'energy_per_iteration_joules': [],
             'joules_per_token': []
         }
+    world_size = int(os.environ.get("WORLD_SIZE", 2))
+    for gpu_idx in range(world_size):
+        results[f'gpu {gpu_idx} total_energy'] = []
     micro_batches = []
     generate_input_ids = generate_dataset_input_ids if use_dataset_prompts else generate_random_input_ids
     if rank == 0: 
@@ -109,12 +111,11 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
                     "input_ids": inputs["input_ids"],
                     "attention_mask": inputs["attention_mask"],
                 })
-    
     dist.barrier()
-    device = torch.cuda.current_device()
+    devices = list(range(world_size))
 
-    power_monitor = PowerMonitor(gpu_indices=[device])
-    monitor = ZeusMonitor(gpu_indices=[device])
+    power_monitor = PowerMonitor(gpu_indices=devices)
+    monitor = ZeusMonitor(gpu_indices=devices)
     window_key = "generate pipeline"
 
     pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=max_new_tokens)
@@ -133,7 +134,6 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         tps = (tokens_generated) / generation_time
         timeline = power_monitor.get_power_timeline(
             power_domain="device_instant",  # or "device_average" or "memory_average"
-            gpu_index=device,  # specify GPU, or None for all GPUs
             start_time=start_time,
             end_time=end_time)
         for gpu_idx, data in timeline.items():
@@ -141,8 +141,11 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
             results['average_power_watts'].append(sum(powers) / len(powers))
             results['max_power_watts'].append(max(powers))
             results['min_power_watts'].append(min(powers))
-        results['total_energy_joules'].append(mes.gpu_energy[device])
-        results['joules_per_token'].append(mes.gpu_energy[device] / tokens_generated)
+        for gpu_idx in mes.gpu_energy: 
+            results[f'gpu {gpu_idx} total_energy'].append(mes.gpu_energy[gpu_idx])
+
+        results[f'total_energy_joules'].append(sum((mes.gpu_energy.values())))
+        results[f'joules_per_token'].append(sum((mes.gpu_energy.values())) / tokens_generated)
         results['generation_time'].append(generation_time)
         results['tps'].append(tps)
         
@@ -153,45 +156,38 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
     row['min_power_watts'] = statistics.mean(results['min_power_watts'])
     row['total_energy_joules'] = statistics.mean(results['total_energy_joules'])
     row['joules_per_token'] = statistics.mean(results['joules_per_token'])
+    for gpu_idx in range(world_size):
+        row[f'total energy from GPU: {gpu_idx}'] = statistics.mean(results[f'gpu {gpu_idx} total_energy'])
 
 
-# def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
-#     """Run benchmark with multiple prompts and iterations."""
-#     if use_dataset_prompts:
-#         batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
-#     else:    
-#         batch = generate_random_input_ids(model_name, batch_size, seq_len)
-
-#     input_ids = batch["input_ids"].cuda()
-#     attention_mask = batch["attention_mask"].cuda()
-#     times = []
-#     _ = model.generate(
-#         input_ids=input_ids,
-#         attention_mask=attention_mask,
-#         max_length=seq_len+5,
-#         do_sample=True,
-#         top_p=0.4,
-#         temperature=0.6)
+def time_to_first_token(pipelined_model, batch_size, seq_len, num_iterations, row, num_micro_batches, rank, use_dataset_prompts=False, model_id="ridger/MMfreeLM-2.7B"):
+    """Estimate Time to First TOken """
     
+    times_to_first_token = []
+    micro_batches = []
+    generate_input_ids = generate_dataset_input_ids if use_dataset_prompts else generate_random_input_ids
+    if rank == 0: 
+        for _ in range(num_micro_batches):
+            inputs = generate_input_ids(model_id, batch_size, seq_len)
+            micro_batches.append(
+                {
+                    "input_ids": inputs["input_ids"],
+                    "attention_mask": inputs["attention_mask"],
+                })
+    dist.barrier()
 
-#     for iter in range(num_iterations):
-#         torch.cuda.synchronize()
-#         start_time = time.time()
-#         outputs = model.generate(
-#             input_ids=input_ids,
-#             attention_mask=attention_mask,
-#             max_new_tokens=1,
-#             do_sample=True,
-#             top_p=0.4,
-#             temperature=0.6
-#         )
-#         torch.cuda.synchronize()
-#         end_time = time.time()
-#         generation_time = end_time - start_time
-#         times.append(generation_time)
-#     return times
+    pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=1)
+    
+    for _ in range(num_iterations):
+        start_time = time.time()
+        torch.cuda.synchronize()
+        pipelined_model.generate_pipelined(micro_batches, max_new_tokens=1)
+        torch.cuda.synchronize()
+        end_time = time.time()
 
-
+        times_to_first_token.append(end_time - start_time)
+        
+    row['time_to_first_token'] = statistics.mean(times_to_first_token)
 
 def create_csv_data(
         sequence_length, 
@@ -207,7 +203,7 @@ def create_csv_data(
     rank = int(os.environ.get("RANK", 0))
     from datetime import datetime
     current_time = datetime.now()
-    filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}rank:{rank}.csv"
+    filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
     pipelined_model = PipelineParallelMatMulFreeLM(weight_multiplier=weight_multiplier, layers_multiplier=layers_multiplier)  
     device = pipelined_model.device
     with open(filename, 'w') as csvfile:
@@ -225,12 +221,13 @@ def create_csv_data(
             print(f"\t\tRunning Benchmarks...")
 
             benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank)
-
-            if(first_row):
-                csvwriter = csv.DictWriter(csvfile, row.keys())
-                csvwriter.writeheader()
-                first_row = False
-            csvwriter.writerow(row) 
+            time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
+            if rank == 0:
+                if(first_row):
+                    csvwriter = csv.DictWriter(csvfile, row.keys())
+                    csvwriter.writeheader()
+                    first_row = False
+                csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
 def main():
