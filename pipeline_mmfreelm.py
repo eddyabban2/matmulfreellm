@@ -9,18 +9,30 @@ import nvtx
 import copy 
 from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+import random
 from utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["NCCL_IB_DISABLE"] = "1"
+OMP_NUM_THREADS=1
+
+import torch.multiprocessing as mp
+if __name__ == '__main__':
+    mp.set_start_method('spawn')
+
 
 class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
-        
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         if not dist.is_initialized():
-            timeout = 1000
-            torch.cuda.set_device(self.rank)
-            dist.init_process_group(backend="nccl", device_id=torch.device(f"cuda:{self.rank}"), timeout=timedelta(seconds=timeout)) 
+            timeout = timedelta(seconds=1200)
+            torch.cuda.set_device(self.local_rank)
+            self.device = torch.device(f"cuda:{self.local_rank}")
+            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
+        dist.barrier()
         self.device = torch.device(f"cuda:{self.rank}")
 
         self.config = HGRNBitConfig.from_pretrained(model_id)
@@ -56,14 +68,19 @@ class PipelineParallelMatMulFreeLM:
                 self.embeddings.to(torch.float16)
         if self.rank == self.world_size - 1:
             self.norm = full_model.model.norm.to(self.device)
-            self.norm.increase_size(weight_multiplier)
             self.lm_head = full_model.lm_head.to(self.device)
-            self.lm_head.increase_size(weight_multiplier, 1)
-        model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
+            if weight_multiplier != 1:
+                self.norm.increase_size(weight_multiplier)
+                self.lm_head.increase_size(weight_multiplier, 1)
+        model_layers = []
+        if layers_multiplier == 1:
+            model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
                 for i in range(self.layer_start, self.layer_end)]
-        for _ in range(layers_multiplier - 1):
-            model_layers += [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
-                            for i in range(self.layer_start, self.layer_end)]
+        else: 
+            layer_count = int(layers_multiplier*(self.layer_end-self.layer_start))
+            for _ in range(layer_count):
+                random_layer_index = random.randint(self.layer_start, self.layer_end-1)
+                model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]).to(self.device))
         self.local_layers = nn.ModuleList(
             model_layers
         )
@@ -87,14 +104,13 @@ class PipelineParallelMatMulFreeLM:
             if self.embeddings != None:
                 print(f"[rank{self.rank}] Embedding Layer: {self.embeddings}")
             # layers 
-            for idx, layer in enumerate(self.local_layers):
-                print(f"[rank{self.rank}] Local Layer [{idx}]: {layer}")
+            print(f"[rank{self.rank}] Local Layers: {self.local_layers}")
             # norm
             if self.norm != None: 
                 print(f"[rank{self.rank}] norm: {self.norm}")
             # lm head 
-            if self.norm != None: 
-                print(f"[rank{self.rank}] norm: {self.lm_head}")
+            if self.lm_head != None: 
+                print(f"[rank{self.rank}] lm_head: {self.lm_head}")
 
     def clear_cache(self):
         self.past_key_values_dict = {}
@@ -162,7 +178,7 @@ class PipelineParallelMatMulFreeLM:
             return logits
 
     @torch.inference_mode()
-    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75):
+    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=False):
         self.clear_cache()
 
         num_mbs_tensor = torch.tensor(
@@ -192,13 +208,13 @@ class PipelineParallelMatMulFreeLM:
             batch_sizes[mb_id] = bs_tensor.item()
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
-            # total_steps = num_mbs + self.world_size - 1
-            total_steps = num_mbs*num_tokens + self.world_size
-            print(f"running for {total_steps}")
+            # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
+            total_steps = num_mbs * num_tokens + self.world_size - 1
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
+
                     logits = None
                     if active:
                         inp = current_mb_inputs.get(mb_id) if self.rank == 0 else None
@@ -210,13 +226,12 @@ class PipelineParallelMatMulFreeLM:
                             is_prefill=is_prefill,
                         )
 
-                    broadcasting_mb_id = step - (self.world_size - 1)
-                    bc_active = 0 <= broadcasting_mb_id < num_mbs
-
+                    broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
+                    bc_active = step >= self.world_size - 1
                     if bc_active:
+                        
                         mb_bs = batch_sizes[broadcasting_mb_id]
                         next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.device)
-
                         if self.rank == self.world_size - 1:
                             assert logits is not None, (
                                 f"Rank {self.rank}: expected logits for mb {broadcasting_mb_id} at step {step}"
@@ -231,16 +246,17 @@ class PipelineParallelMatMulFreeLM:
                         dist.broadcast(next_token, src=self.world_size - 1)
 
                         if self.rank == 0:
-                            print(f"step: {step} broadcasting for mb: {broadcasting_mb_id}")
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
+        if single_call: 
+            generate_token_loop(False, max_new_tokens)
+        else:
+            with nvtx.annotate("pipelined_prefill", color="blue"):
+                generate_token_loop(True, 1)
 
-        with nvtx.annotate("pipelined_prefill", color="blue"):
-            generate_token_loop(True, 1)
+            with nvtx.annotate("pipelined_decode", color="green"):
+                generate_token_loop(False, max_new_tokens-1)
 
-        with nvtx.annotate("pipelined_decode", color="green"):
-            generate_token_loop(False, max_new_tokens-1)
-        print(f"all generated output_tokens: {all_generated_tokens}")
         final_outputs = {}
         for mb_id in range(num_mbs):
             if all_generated_tokens[mb_id]:
@@ -250,9 +266,10 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 2
-    weight_multiplier = 1.11
-    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=False)
+    layers_multiplier = 1.5
+    weight_multiplier = 1
+    print_model_config = True
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=print_model_config)
 
     num_micro_batches = 7
     batch_size_per_mb = 5
