@@ -206,14 +206,19 @@ def create_csv_data(
     filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
     pipelined_model = PipelineParallelMatMulFreeLM(weight_multiplier=weight_multiplier, layers_multiplier=layers_multiplier)  
     device = pipelined_model.device
+    world_size = int(os.environ.get("WORLD_SIZE", 2))
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         original_hidden_layer_size = 2560
         original_num_layers = 32
+        memory_usage = 0
+        for device in range(world_size): 
+            memory_usage += torch.cuda.memory_allocated(device=device)
         row = {
             'device': device, 
             'Hiden Layer Size': original_hidden_layer_size*weight_multiplier, 
-            'Number of Layers': original_num_layers*layers_multiplier}
+            'Number of Layers': original_num_layers*layers_multiplier, 
+            'DRAM Bytes From Model (Bytes)': memory_usage}
         for batch_power in reversed(range(min_batch_power, max_batch_power)):
             batch_size = 2**batch_power
             row['Batch Size'] = batch_size
