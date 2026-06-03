@@ -79,6 +79,20 @@ parser.add_argument(
     help="stores the maximum batch power to go up to when profiling",
 )
 
+parser.add_argument(
+    "--collect_power_data",
+    action='store_true',
+    default=False,
+    help="sets whether we should collect power data"
+)
+
+parser.add_argument(
+    "--print_csv",
+    action='store_true',
+    default=False,
+    help="prints csv after creating data"
+)
+
 args = parser.parse_args()
 
 logging.set_verbosity_error()
@@ -86,7 +100,7 @@ logging.disable_default_handler()
 logging.disable_propagation()
 
 
-def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, max_new_tokens, row, num_micro_batches, rank, use_dataset_prompts=False, model_id="ridger/MMfreeLM-2.7B"):
+def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, max_new_tokens, row, num_micro_batches, rank, use_dataset_prompts=False, model_id="ridger/MMfreeLM-2.7B", collect_power_data=False):
     """Run benchmark with multiple prompts and iterations."""
     
     results = {
@@ -95,12 +109,17 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
             'average_power_watts': [],
             'max_power_watts': [],
             'min_power_watts': [], 
-            'total_energy_joules': [],
-            'joules_per_token': []
+            'total_energy_joules': []
         }
     world_size = int(os.environ.get("WORLD_SIZE", 2))
-    for gpu_idx in range(world_size):
-        results[f'gpu {gpu_idx} total_energy'] = []
+    if collect_power_data:
+        results['joules_per_token'] = []
+        results['average_power_watts'] = []
+        results['max_power_watts'] = []
+        results['min_power_watts'] = [] 
+        results['total_energy_joules'] = []
+        for gpu_idx in range(world_size):
+            results[f'gpu {gpu_idx} total_energy'] = []
     micro_batches = []
     generate_input_ids = generate_dataset_input_ids if use_dataset_prompts else generate_random_input_ids
     if rank == 0: 
@@ -113,52 +132,56 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
                 })
     dist.barrier()
     devices = list(range(world_size))
-
-    power_monitor = PowerMonitor(gpu_indices=devices)
-    monitor = ZeusMonitor(gpu_indices=devices)
-    window_key = "generate pipeline"
+    if collect_power_data:
+        power_monitor = PowerMonitor(gpu_indices=devices)
+        monitor = ZeusMonitor(gpu_indices=devices)
+        window_key = "generate pipeline"
 
     pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=max_new_tokens)
     
     for _ in range(num_iterations):
         start_time = time.time()
         torch.cuda.synchronize()
-        monitor.begin_window(window_key, sync_execution=True)
+        if collect_power_data:
+            monitor.begin_window(window_key, sync_execution=True)
         pipelined_model.generate_pipelined(micro_batches, max_new_tokens=max_new_tokens)
-        mes = monitor.end_window("generate pipeline", sync_execution=True)
+        if collect_power_data:
+            mes = monitor.end_window("generate pipeline", sync_execution=True)
         torch.cuda.synchronize()
         end_time = time.time()
 
         generation_time = end_time - start_time
         tokens_generated = max_new_tokens*batch_size*num_micro_batches
         tps = (tokens_generated) / generation_time
-        timeline = power_monitor.get_power_timeline(
-            power_domain="device_instant",  # or "device_average" or "memory_average"
-            start_time=start_time,
-            end_time=end_time)
-        for gpu_idx, data in timeline.items():
-            powers = [power_watts for timestamp, power_watts in data]
-            results['average_power_watts'].append(sum(powers) / len(powers))
-            results['max_power_watts'].append(max(powers))
-            results['min_power_watts'].append(min(powers))
-        for gpu_idx in mes.gpu_energy: 
-            results[f'gpu {gpu_idx} total_energy'].append(mes.gpu_energy[gpu_idx])
+        if collect_power_data: 
+            timeline = power_monitor.get_power_timeline(
+                power_domain="device_instant",  # or "device_average" or "memory_average"
+                start_time=start_time,
+                end_time=end_time)
+            for gpu_idx, data in timeline.items():
+                powers = [power_watts for timestamp, power_watts in data]
+                if len(powers) != 0:
+                    results['average_power_watts'].append(sum(powers) / len(powers))
+                results['max_power_watts'].append(max(powers))
+                results['min_power_watts'].append(min(powers))
+            for gpu_idx in mes.gpu_energy: 
+                results[f'gpu {gpu_idx} total_energy'].append(mes.gpu_energy[gpu_idx])
 
-        results[f'total_energy_joules'].append(sum((mes.gpu_energy.values())))
-        results[f'joules_per_token'].append(sum((mes.gpu_energy.values())) / tokens_generated)
+            results[f'total_energy_joules'].append(sum((mes.gpu_energy.values())))
+            results[f'joules_per_token'].append(sum((mes.gpu_energy.values())) / tokens_generated)
         results['generation_time'].append(generation_time)
         results['tps'].append(tps)
-        
+    if collect_power_data:
+        row['average_power_watts'] = statistics.mean(results['average_power_watts'])
+        row['max_power_watts'] = statistics.mean(results['max_power_watts'])
+        row['min_power_watts'] = statistics.mean(results['min_power_watts'])
+        row['total_energy_joules'] = statistics.mean(results['total_energy_joules'])
+        row['joules_per_token'] = statistics.mean(results['joules_per_token'])
+        for gpu_idx in range(world_size):
+            row[f'total energy from GPU: {gpu_idx}'] = statistics.mean(results[f'gpu {gpu_idx} total_energy'])
+
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
-    row['average_power_watts'] = statistics.mean(results['average_power_watts'])
-    row['max_power_watts'] = statistics.mean(results['max_power_watts'])
-    row['min_power_watts'] = statistics.mean(results['min_power_watts'])
-    row['total_energy_joules'] = statistics.mean(results['total_energy_joules'])
-    row['joules_per_token'] = statistics.mean(results['joules_per_token'])
-    for gpu_idx in range(world_size):
-        row[f'total energy from GPU: {gpu_idx}'] = statistics.mean(results[f'gpu {gpu_idx} total_energy'])
-
 
 def time_to_first_token(pipelined_model, batch_size, seq_len, num_iterations, row, num_micro_batches, rank, use_dataset_prompts=False, model_id="ridger/MMfreeLM-2.7B"):
     """Estimate Time to First TOken """
@@ -197,7 +220,9 @@ def create_csv_data(
         max_batch_power, 
         count_micro_batches, 
         weight_multiplier, 
-        layers_multiplier):
+        layers_multiplier, 
+        collect_power_data=False,
+        print_csv=False):
 
     first_row = True
     rank = int(os.environ.get("RANK", 0))
@@ -225,7 +250,7 @@ def create_csv_data(
             print(f"\tCollecting data for batch size: {batch_size}")
             print(f"\t\tRunning Benchmarks...")
 
-            benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank)
+            benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=collect_power_data)
             time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
             if rank == 0:
                 if(first_row):
@@ -234,6 +259,10 @@ def create_csv_data(
                     first_row = False
                 csvwriter.writerow(row) 
         print(f"Data written to {filename}")
+    if print_csv:
+        with open(filename, "r") as file:
+            print(file.read())
+
 
 def main():
     sequence_length=int(args.sequence_length)
@@ -244,8 +273,10 @@ def main():
     count_micro_batches=int(args.micro_batches)
     weight_multiplier=float(args.weight_multiplier)
     layers_multiplier=float(args.layers_multiplier)
+    collect_power_data= args.collect_power_data
+    print_csv = args.print_csv
 
-    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier)
+    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier, collect_power_data=collect_power_data, print_csv=print_csv)
 
 if __name__ == "__main__":
     main()
