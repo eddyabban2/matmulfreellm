@@ -12,6 +12,7 @@ graphs/
 *.png
 *.sqlite
 venv/
+bitnet/
 *.nsys-rep
 *.qdstrm
 *.log

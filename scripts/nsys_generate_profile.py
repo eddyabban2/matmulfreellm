@@ -34,9 +34,9 @@ def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B
     model_name = model_name.replace("/", "-")
     return  os.getcwd() + "/outputs/nsys_runs/nsys_profiler" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "prefillAndDecode" + str(prefill_decode)
 
-batch_size = 5
-seq_len = 5 
-new_tokens = 5 
+batch_size = 300
+seq_len = 100 
+new_tokens = 10 
 
 report_name = create_report_name(batch_size, new_tokens, seq_len)
 print(report_name)

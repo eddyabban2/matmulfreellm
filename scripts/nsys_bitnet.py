@@ -34,9 +34,9 @@ def create_report_name(bs, new_tokens, seq_len, model_name='bitnet'):
     model_name = model_name.replace("/", "-")
     return  os.getcwd() + "/outputs/nsys_runs/nsys_profiler" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "prefillAndDecode" + str(prefill_decode)
 
-batch_size = 10
-seq_len = 15 
-new_tokens = 10 
+batch_size = 500
+seq_len = 10 
+new_tokens = 100
 
 report_name = create_report_name(batch_size, new_tokens, seq_len)
 print(report_name)

@@ -114,8 +114,7 @@ if "ridger" in model_name:
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
 else: 
     model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        device_map="auto")
+        model_name).cuda()
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
