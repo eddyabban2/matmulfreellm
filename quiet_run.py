@@ -1,3 +1,8 @@
+# Example run: 
+# python quiet_run.py -b 5 -s 10 -n 10 -i 1 
+# Example Bitnet Run: 
+# python quiet_run.py -b 5 -s 10 -n 10 -i 1 --model_name microsoft/bitnet-b1.58-2B-4T --prefill_decode
+
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
@@ -5,7 +10,14 @@ from transformers import AutoModelForCausalLM, logging
 from utils import generate_random_input_ids, generate_dataset_input_ids
 import argparse
 import nvtx
+import transformers.integrations.bitnet as bitnet
+import bitnet as local_bitnet
 
+bitnet.pack_weights = local_bitnet.pack_weights
+bitnet.unpack_weights = local_bitnet.unpack_weights
+bitnet.BitLinear = local_bitnet.BitLinear
+bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
+bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"
 )
@@ -67,10 +79,6 @@ parser.add_argument(
 
 print("quiet run is running")
 args = parser.parse_args()
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
 
 logging.set_verbosity_error()
 logging.disable_default_handler()
@@ -101,8 +109,13 @@ else:
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
 
-model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-
+model = None
+if "ridger" in model_name:
+    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+else: 
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto")
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
