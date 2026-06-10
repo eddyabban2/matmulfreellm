@@ -12,12 +12,26 @@ import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
 import bitnet as local_bitnet
+import random
+import numpy as np
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
 bitnet.BitLinear = local_bitnet.BitLinear
 bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
 bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
+
+seed = 42
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+random.seed(seed)
+np.random.seed(seed)
+
+# Force cuDNN determinism
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"
 )
@@ -149,9 +163,8 @@ with nvtx.annotate("workload", color="cyan"):
             model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    min_new_tokens=max_new_tokens,
                     max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    top_p=0.4,
-                    temperature=0.6
+                    do_sample=False
                 )
 print("inference worked")

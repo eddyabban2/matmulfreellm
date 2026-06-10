@@ -1,5 +1,6 @@
 # Used To Collect Roofline Data
-#   python auto_profiler.py -s 100 --max_new_tokens 1 --min_batch_power 10 --max_batch_power 10
+#   python auto_profiler.py -s 100 --max_new_tokens 3 --min_batch_power 10 --max_batch_power 10
+#   python auto_profiler.py -s 100 --max_new_tokens 3 --min_batch_power 10 --max_batch_power 10 --model_name microsoft/bitnet-b1.58-2B-4T
 
 import subprocess
 import argparse
@@ -234,7 +235,8 @@ def extract_flops(df):
         df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"].sum()
     )
 
-    tensor_count = df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"].sum() 
+    tensor_count = (df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"].sum() +
+                    df["smsp__ops_path_tensor_src_bf16_dst_fp32.sum (nan)"].sum())
     
     return double_precision_flops, single_precision_flops, half_precision_flops, tensor_count
 
@@ -302,9 +304,10 @@ def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
     return weight_floats/(weight_floats+ activation_floats + output_floats)
 
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
-    workload_string = f"{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}"
+    clean_model_name = model_name.replace("/","-")
+    workload_string = f"model{clean_model_name}-{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}"
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
-    df.head(n=10000).to_csv(f"outputs/csvs/unflattened_kernels-{workload_string}.csv")
+    df.head(n=10000).to_csv(os.getcwd()+ f"/outputs/csvs/unflattened_kernels-{workload_string}.csv")
     df = flatten_kernels(df)
     df = add_additional_columns(df, bs, new_tokens, seq_len)
     df.head(n=10000).to_csv(f"outputs/csvs/flattened-kernels-with_metrics-{workload_string}.csv")
@@ -312,32 +315,35 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     full_workload_row = get_metrics_from_data_frame(df, fraction_of_memory_from_weights)
     full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])
-
-    has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
-    has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
-    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')
+    if 'ridger' in model_name:
+        has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
+        has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
+        first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
+        first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
+    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('ternary matmul')
     has_prefill = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')
     has_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep0')
     has_second_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep1')
-    first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
-    first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
     linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
     prefill_kernels_df = get_continous_group_of_kernals(df, has_prefill, 0)
+    if not (has_second_decode == False).all():
+        second_decode_kernels_df = get_continous_group_of_kernals(df, has_second_decode, 0)
+        second_decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/second_decode_kernels-{workload_string}.csv")
+
+
     decode_kernels_df = get_continous_group_of_kernals(df, has_decode, 0)
-    second_decode_kernels_df = get_continous_group_of_kernals(df, has_second_decode, 0)
-
-
     prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
     decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
-    if second_decode_kernels_df.shape[0] > 0:
-        decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/second_decode_kernels-{workload_string}.csv")
     
+    if 'ridger' in workload_string:
+        first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
+        first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
-    first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
-    first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df, fraction_of_memory_from_weights)
+        first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
-    first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df, fraction_of_memory_from_weights)
-    first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
+        first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
 
     linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
@@ -348,12 +354,10 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     decode_region_row = get_metrics_from_data_frame(decode_kernels_df, fraction_of_memory_from_weights)
     decode_region_row['Workload'] = f'2.7B first decode region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
-    first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
-    first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
-
-
     logger.info(f"full workload row generated: {full_workload_row}")
-    return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row, prefill_region_row, decode_region_row]
+    if 'ridger' in workload_string:
+        return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row, prefill_region_row, decode_region_row]
+    return [full_workload_row, linear_region_row, prefill_region_row, decode_region_row]
 
 def extract_additional_workload_data(df, workload_str):
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
@@ -361,6 +365,7 @@ def extract_additional_workload_data(df, workload_str):
     run_time_us = extract_run_time(df)
     dram_kbytes_accessed = extract_dram_usage(df)
 
+    
     atten_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')]
     atten_double_precision_count, atten_single_precision_count, atten_half_precision_count, atten_tensor_count = extract_flops(atten_df)
     atten_flop_count = atten_double_precision_count +  atten_single_precision_count +  atten_half_precision_count +  atten_tensor_count
@@ -379,11 +384,17 @@ def extract_additional_workload_data(df, workload_str):
     scalar_run_time_us = extract_run_time(scalar_df)
     scalar_dram_kbytes_accessed = extract_dram_usage(scalar_df)
 
-    linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')]
+    linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('ternary matmul')]
     linear_double_precision_count, linear_single_precision_count, linear_half_precision_count, linear_tensor_count = extract_flops(linear_df)
     linear_flop_count = linear_double_precision_count +  linear_single_precision_count +  linear_half_precision_count +  linear_tensor_count
     linear_run_time_us = extract_run_time(linear_df)
     linear_dram_kbytes_accessed = extract_dram_usage(linear_df)
+
+    unpack_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('unpack weights')]
+    unpack_double_precision_count, unpack_single_precision_count, unpack_half_precision_count, unpack_tensor_count = extract_flops(unpack_df)
+    unpack_flop_count = unpack_double_precision_count +  unpack_single_precision_count +  unpack_half_precision_count +  unpack_tensor_count
+    unpack_run_time_us = extract_run_time(unpack_df)
+    unpack_dram_kbytes_accessed = extract_dram_usage(unpack_df)
 
     # prefill_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')]
     # prefill_double_precision_count, prefill_single_precision_count, prefill_half_precision_count, prefill_tensor_count = extract_flops(prefill_df)
@@ -414,25 +425,30 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"{(atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitMLP\n")
         f.write(f"{(linear_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Linear\n")
+        f.write(f"{(unpack_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Unpacking Weights\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitMLP\n")
         f.write(f"{(linear_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Linear\n")
+        f.write(f"{(unpack_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Unpacking Weights\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with  HGRNBitMLP\n")
         f.write(f"{(linear_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Linear\n")
+        f.write(f"{(unpack_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Unpacking Weights\n")
         f.write(f"==============================================================================================\n")
-        f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
-        f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
-        f.write(f"{(atten_half_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations\n")
-        f.write(f"{(atten_tensor_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations\n")
-        f.write(f"==============================================================================================\n")
-        f.write(f"{(mlp_double_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 64 bit floating point operations\n")
-        f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
-        f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
-        f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
-        f.write(f"==============================================================================================\n")
+        if atten_flop_count != 0: 
+            f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
+            f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
+            f.write(f"{(atten_half_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations\n")
+            f.write(f"{(atten_tensor_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations\n")
+            f.write(f"==============================================================================================\n")
+        if mlp_flop_count != 0: 
+            f.write(f"{(mlp_double_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 64 bit floating point operations\n")
+            f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
+            f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
+            f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
+            f.write(f"==============================================================================================\n")
         f.write(f"{(linear_double_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 64 bit floating point operations\n")
         f.write(f"{(linear_single_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 32 bit floating point operations\n")
         f.write(f"{(linear_half_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 16 bit floating point operations\n")
