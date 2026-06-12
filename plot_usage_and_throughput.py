@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np 
 import matplotlib.cm as cm
 
-# --- Function Definitions ---
 
 def extend_metric_for_cycles(df: pd.DataFrame, metric: str) -> list:
     """
@@ -81,7 +80,7 @@ def plot_multi_metric(df: pd.DataFrame, metrics: list, ylabel: str, title: str):
             spans.append(('Attention Kernels', 'blue', None))
         if 'HGRNBitMLP' in row[nvtx_col]:
             spans.append(('HGRN MLP Kernels', 'yellow', None))
-        if 'linearFunction' in row[nvtx_col]:
+        if 'ternary matmul' in row[nvtx_col]:
             spans.append(('Ternary Matmul Kernels ', 'white', "///"))
 
         for label, color, hatch in spans:
@@ -179,14 +178,9 @@ def main():
     
     args = parser.parse_args()
     
-    # 1. Import data
     csv_name = args.csv
-    
-    # Optimization Tip: If you know the data types, pass them to pd.read_csv
-    # This can prevent Pandas from having to infer types row-by-row.
-    # df = pd.read_csv(csv_name, dtype={'column_name': np.float32, 'integer_col': np.int32})
     try:
-        df = pd.read_csv(csv_name).head(n=100)
+        df = pd.read_csv(csv_name).head(n=200)
     except FileNotFoundError:
         print(f"Error: CSV file not found at {csv_name}")
         return

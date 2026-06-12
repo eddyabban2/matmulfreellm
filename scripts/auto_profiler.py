@@ -197,7 +197,6 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
     )
 
     tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
-    tensor_flop_count = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)" 
     tensor_flop_correction_factor = 1 
     tensor_flop_rate = None 
     if "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)" in df: 
@@ -207,7 +206,7 @@ def add_additional_columns(df, bs, new_tokens, seq_len):
         tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/ns)'
 
     df["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df[tensor_inst_rate]/1e-9
-    tensor_flops = df[tensor_flop_count]
+    tensor_flops = df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"] + df["smsp__ops_path_tensor_src_bf16_dst_fp32.sum (nan)"]
     df["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df[tensor_flop_rate] / tensor_flop_correction_factor
 
     df["(Double Precision) Compute Intensity"] = double_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
@@ -313,7 +312,7 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     df.head(n=10000).to_csv(f"outputs/csvs/flattened-kernels-with_metrics-{workload_string}.csv")
     fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
     full_workload_row = get_metrics_from_data_frame(df, fraction_of_memory_from_weights)
-    full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    full_workload_row['Workload'] = f'{clean_model_name} end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])
     if 'ridger' in model_name:
         has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
@@ -334,6 +333,13 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     decode_kernels_df = get_continous_group_of_kernals(df, has_decode, 0)
     prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
     decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
+
+
+    decode_string = f'{clean_model_name} decode with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    extract_additional_workload_data(decode_kernels_df, decode_string)
+
+    prefill_string = f'{clean_model_name} prefill with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    extract_additional_workload_data(prefill_kernels_df, prefill_string)
     
     if 'ridger' in workload_string:
         first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
@@ -409,7 +415,7 @@ def extract_additional_workload_data(df, workload_str):
     # decode_dram_kbytes_accessed = extract_dram_usage(decode_df)
 
 
-    with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "w") as f:
+    with open(f"outputs/txt/additional_workload_info_{workload_str}.txt", "w") as f:
         f.write(f"{workload_str}\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
@@ -487,7 +493,7 @@ def main():
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
-        for batch_power in range(min_batch_power, max_batch_power+1):
+        for batch_power in reversed(range(min_batch_power, max_batch_power+1)):
             batch_size = 2**batch_power
             run_ncu_profile(batch_size, max_new_tokens, sequence_length, model_name=model_name)
             thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length, model_name))

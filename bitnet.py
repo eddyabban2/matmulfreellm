@@ -178,14 +178,17 @@ class BitLinear(nn.Module):
     def forward(self, input):
         with nvtx.annotate("BitLinear Forward", color="pink"):
             w = self.weight
+            with nvtx.annotate("activation quantization", color="orchid"):
+                input_quant, input_scale = self.activation_quant(input)
             with nvtx.annotate("unpack weights", color="red"):
                 w_quant = unpack_weights(w, dtype=self.dtype)
-            input_quant, input_scale = self.activation_quant(input)
             with nvtx.annotate("ternary matmul", color="cyan"):
                 y = F.linear(input_quant.to(self.dtype), w_quant)
-            y = self.post_quant_process(y, self.weight_scale, input_scale)
-            if self.bias is not None:
-                y += self.bias.view(1, -1).expand_as(y)
+            with nvtx.annotate("post quantization processing", color="teal"):
+                y = self.post_quant_process(y, self.weight_scale, input_scale)
+            with nvtx.annotate("applying bias", color="tan"):
+                if self.bias is not None:
+                    y += self.bias.view(1, -1).expand_as(y)
             return y
 
 
