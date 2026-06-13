@@ -8,8 +8,6 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 import nvtx
-import traceback
-import sys
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
@@ -469,8 +467,12 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
             y = y.reshape(x_shape_og)
             dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
             # linear_weight = weight_quant(linear_weight).to(dtype)
-            with nvtx.annotate("dataTypeConversion", color="red"):
-                linear_weight = linear_weight.to(dtype)
+            if compress_weights:
+                with nvtx.annotate("unpack weights", color="red"):
+                    linear_weight = unpack_weights(linear_weight, dtype)
+            else:
+                with nvtx.annotate("dataTypeConversion", color="red"):
+                    linear_weight = linear_weight.to(dtype)
             linear_bias = linear_bias.to(dtype) if linear_bias is not None else None
             y = y.to(linear_weight.dtype)
             with nvtx.annotate("ternary matmul", color="yellow"):
@@ -479,7 +481,8 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
                 if scale != None:
                     out.div_(scale)
                 else:
-                    print("out does not equal none please panic")
+                    print("scale equals None this should never happen")
+                    exit()
            # print(f"output: {out.type()}, y type: {y.type()}, weight_type: {linear_weight.type()}")
             #print(out.size())
             # print(f"output: {out.size()}")
@@ -610,7 +613,8 @@ class BitLinear(nn.Linear):
 
             return y
 
-
+compress_weights = True
+test_compression = False 
 class FusedBitLinear(BitLinear):
     """
     A custom linear layer that applies quantization on both activations and weights.
@@ -630,6 +634,7 @@ class FusedBitLinear(BitLinear):
         super(FusedBitLinear, self).__init__(in_features, out_features, bias=bias)
         self.cached_weights = None
         self.cached_scale = None
+        self.compressed_weights = None
 
     def increase_size(self, in_multiplier, out_multiplier):
         weight_dimension_out, weight_dimension_in = self.weight.shape
@@ -645,14 +650,35 @@ class FusedBitLinear(BitLinear):
         self.norm.increase_size(in_multiplier)
 
     def forward(self, x):
-        with nvtx.annotate("Fused Bit Linear At Bottom", color="red"):
-            if(self.cached_weights == None):
+        with nvtx.annotate("Fused Bit Linear", color="red"):
+            if(self.compressed_weights == None and self.cached_weights == None):
                 # print("weights are not cached cacheing")
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
                 del self.weight
-            # if self.cached_weights != None and torch.equal(self.weight, self.cached_weights):
-            #     print("error the weights have changed")
+                if compress_weights: 
+                    self.compressed_weights = pack_weights(self.cached_weights)
+                    if test_compression: 
+                        unpacked_weights = unpack_weights(self.compressed_weights, self.cached_weights.dtype)
+                        if torch.equal(unpacked_weights, self.cached_weights):
+                            print("Weight compression is incorrect")
+                            exit()
+                        else: 
+                            print('Weight Compression passed')
+                        del unpacked_weights
+
+                    del self.cached_weights
+                    torch.cuda.empty_cache()
+            if compress_weights:
+                return layer_norm_linear_quant_fn(
+                    x,
+                    self.norm.weight,
+                    self.norm.bias,
+                    self.compressed_weights,
+                    self.bias,
+                    is_rms_norm=True, 
+                    scale=self.cached_scale
+                )
             return layer_norm_linear_quant_fn(
                 x,
                 self.norm.weight,
@@ -662,3 +688,114 @@ class FusedBitLinear(BitLinear):
                 is_rms_norm=True, 
                 scale=self.cached_scale
             )
+
+VALUES_PER_ITEM = 4
+
+
+def pack_weights(quantized_weights: torch.Tensor) -> torch.Tensor:
+    """
+    Packs a tensor of quantized weights into a compact format using 2 bits per value.
+
+    Parameters:
+    -----------
+    quantized_weights : torch.Tensor
+        A tensor containing ternary quantized weights with values in {-1, 0, 1}. These values are adjusted to
+        {0, 1, 2} before being packed.
+
+    Returns:
+    --------
+    torch.Tensor
+        A packed tensor where each element stores 4 quantized values (each using 2 bits) in an 8-bit format.
+    """
+    with nvtx.annotate("pack_weights", color="cyan"):
+        # print("packing weights")
+        original_shape = quantized_weights.shape
+
+        row_dim = (original_shape[0] + VALUES_PER_ITEM - 1) // VALUES_PER_ITEM
+
+        if len(original_shape) == 1:
+            packed_tensor_shape = (row_dim,)
+        else:
+            packed_tensor_shape = (row_dim, *original_shape[1:])
+
+        quantized_weights += 1
+        packed = torch.zeros(packed_tensor_shape, device=quantized_weights.device, dtype=torch.uint8)
+        unpacked = quantized_weights.to(torch.uint8)
+
+        it = min(VALUES_PER_ITEM, (original_shape[0] // row_dim) + 1)
+        for i in range(it):
+            start = i * row_dim
+            end = min(start + row_dim, original_shape[0])
+            packed[: (end - start)] |= unpacked[start:end] << 2 * i
+
+        return packed
+
+
+@torch.compile
+def unpack_weights(packed: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Unpacks a tensor of quantized weights that were stored in a packed format using 2 bits per value.
+
+    Parameters:
+    -----------
+    packed : torch.Tensor
+        A tensor containing packed weights where each element represents 4 quantized values (using 2 bits per value).
+    dtype : torch.dtype
+        The dtype of the returned Tensor
+    Returns:
+    --------
+    torch.Tensor
+        A tensor of unpacked weights, where each value is converted from its packed 2-bit representation.
+
+    Example:
+    --------
+    packed = torch.tensor([[0b10100001, 0b00011000],
+                           [0b10010000, 0b00001010]], dtype=torch.uint8)
+
+    # Unpack the values
+    unpacked = unpack_weights(packed)
+
+    # Resulting unpacked tensor
+    print(unpacked)
+    # Output: tensor([[ 0, -1],
+                      [-1,  1],
+                      [-1,  1],
+                      [-1,  1],
+                      [ 1,  0],
+                      [ 0, -1],
+                      [ 1, -1],
+                      [ 1, -1]])
+
+    Explanation of the example:
+    ---------------------------
+    Let's take the first value for example 0b10100001, we we will only focus on the first column,
+    because every element is unpacked across the first dimension
+    - First 2 bits: `01` → 0 at [0][0]
+    - Second 2 bits: `00` → -1 at [0][2]
+    - Third 2 bits: `10` → 1 at [0][4]
+    - Fourth 2 bits: `10` → 1 at [0][6]
+    the second value of the same row (0b10010000) will give the values for [0][1], [0][3], [0][5], [0][7]
+
+    We subtract 1 because during the packing process, it's easier to work with values like 0, 1, and 2. To make this possible,
+    we add 1 to the original ternary weights (which are typically -1, 0, and 1) when packing them. When unpacking, we reverse
+    this by subtracting 1 to restore the original ternary values.
+    """
+    packed_shape = packed.shape
+
+    if len(packed_shape) == 1:
+        original_row_dim = packed_shape[0] * VALUES_PER_ITEM
+        unpacked_shape = (original_row_dim,)
+    else:
+        original_row_dim = packed_shape[0] * VALUES_PER_ITEM
+        unpacked_shape = (original_row_dim, *packed_shape[1:])
+
+    unpacked = torch.zeros(unpacked_shape, device=packed.device, dtype=torch.uint8)
+
+    for i in range(VALUES_PER_ITEM):
+        start = i * packed_shape[0]
+        end = start + packed_shape[0]
+        mask = 3 << (2 * i)
+        unpacked[start:end] = (packed & mask) >> (2 * i)
+
+    return unpacked.to(dtype) - 1
+

@@ -14,6 +14,7 @@ import transformers.integrations.bitnet as bitnet
 import bitnet as local_bitnet
 import random
 import numpy as np
+import gc 
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -139,6 +140,8 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
+gc.collect()
+torch.cuda.empty_cache()
 print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
