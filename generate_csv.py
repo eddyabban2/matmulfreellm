@@ -70,6 +70,13 @@ parser.add_argument(
     help="changes the model to using the original implementation"
 )
 
+parser.add_argument(
+    "--print_csv",
+    action='store_true',
+    default=False,
+    help="prints csv after creating data"
+)
+
 args = parser.parse_args()
 
 if(args.use_original):
@@ -146,7 +153,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
+        max_new_tokens=1,
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
@@ -187,7 +194,6 @@ def detailed_runtime_metrics(model, batch_size, seq_len, num_iterations, max_new
     prefill_times = []
     decode_times = []
     for _ in range(num_iterations):
-
         torch.cuda.synchronize()
         start_time = time.time()
         with torch.no_grad():
@@ -405,6 +411,9 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
                 torch.cuda.empty_cache()
 
         print(f"Data written to {filename}")
+    if print_csv:
+        with open(filename, "r") as file:
+            print(file.read())
 
 def main():
     if args.fixed_point:
