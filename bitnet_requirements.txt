@@ -1,0 +1,13 @@
+einops
+matplotlib
+numpy
+nvtx
+packaging
+pandas
+setuptools
+torch==2.7.0
+transformers
+triton
+zeus
+pyarrow
+accelerate>=0.26.0
