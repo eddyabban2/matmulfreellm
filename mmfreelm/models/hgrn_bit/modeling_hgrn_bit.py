@@ -86,6 +86,15 @@ class HGRNBitBlock(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act
         )
+    def set_compression(self, compression):
+        self.attn.i_proj.compress_weights = compression
+        self.attn.f_proj.compress_weights = compression
+        self.attn.g_proj.compress_weights = compression
+        self.attn.o_proj.compress_weights = compression
+
+        self.mlp.gate_proj.compress_weights = compression
+        self.mlp.down_proj.compress_weights = compression
+
 
     def forward(
         self,

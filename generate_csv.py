@@ -9,6 +9,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
+import gc
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 from utils import generate_random_input_ids, generate_dataset_input_ids
@@ -17,6 +18,7 @@ import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
+from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -31,7 +33,7 @@ parser.add_argument(
 
 parser.add_argument( 
     "--max_new_tokens",
-    default=32,
+    default=2,
     help="sets the sequence length of input tokens"
 )
 
@@ -137,9 +139,9 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     input_ids = batch["input_ids"].cuda()
     attention_mask = batch["attention_mask"].cuda()
 
-    power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
-    monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
-    window_key = f"Batch Size {batch_size} Seq Len {seq_len}"
+    # power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
+    # monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
+    # window_key = f"Batch Size {batch_size} Seq Len {seq_len}"
 
     _ = model.generate(
         input_ids=input_ids,
@@ -182,32 +184,45 @@ def detailed_runtime_metrics(model, batch_size, seq_len, num_iterations, max_new
 
     input_ids = batch["input_ids"].cuda()
     attention_mask = batch["attention_mask"].cuda()
-
-    torch.cuda.synchronize()
-    start_time = time.time()
-    with torch.no_grad():
-        out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
-    torch.cuda.synchronize()
-    end_time = time.time()
-
-    prefill_time = end_time - start_time
+    prefill_times = []
     decode_times = []
-    past = out.past_key_values
-    next_tok = out.logits[:, -1:, :].argmax(-1)
-    with torch.no_grad():
-        for i in range(max_new_tokens-1):
-                torch.cuda.synchronize()
-                start_time = time.time()
-                out = model(input_ids=next_tok, past_key_values=past,
-                            use_cache=True, return_dict=True)
-                past = out.past_key_values
-                next_tok = out.logits[:, -1:, :].argmax(-1)
-                torch.cuda.synchronize()
-                end_time = time.time()
-                decode_times.append(end_time - start_time)
-    row["Prefill Time (s)"] = prefill_time
-    row["Deocde Time"] = sum(decode_times)
-    row["Avg Single Decode Forward Pass (s)"] = statistics.mean(decode_times)
+    for _ in range(num_iterations):
+
+        torch.cuda.synchronize()
+        start_time = time.time()
+        with torch.no_grad():
+            out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+        torch.cuda.synchronize()
+        end_time = time.time()
+
+        prefill_time = end_time - start_time
+        prefill_times.append(prefill_time)
+        curr_decode_times = []
+        past = out.past_key_values
+        next_tok = out.logits[:, -1:, :].argmax(-1)
+        with torch.no_grad():
+            for i in range(max_new_tokens-1):
+                    torch.cuda.synchronize()
+                    start_time = time.time()
+                    out = model(input_ids=next_tok, past_key_values=past,
+                                use_cache=True, return_dict=True)
+                    past = out.past_key_values
+                    next_tok = out.logits[:, -1:, :].argmax(-1)
+                    torch.cuda.synchronize()
+                    end_time = time.time()
+                    curr_decode_times.append(end_time - start_time)
+            decode_times.append(curr_decode_times)
+    row["Avg Prefill Time (s)"] = statistics.mean(prefill_times)
+    row["Max Prefill Time (s)"] = max(prefill_times)
+    row["Min Prefill Time (s)"] = min(prefill_times)
+    all_single_decode_times = [t for iteration in decode_times for t in iteration]
+    total_decode_times = [sum(iteration) for iteration in decode_times]
+    row["Avg Single Deocde Time (s)"] = statistics.mean(all_single_decode_times)
+    row["Min Single Deocde Time (s)"] = min(all_single_decode_times)
+    row["Max Single Deocde Time (s)"] = max(all_single_decode_times)
+    row[f"Avg Deocde Time For {max_new_tokens-1} Tokens (s)"] = statistics.mean(total_decode_times)
+    row[f"Max Deocde Time For {max_new_tokens-1} Tokens (s)"] = max(total_decode_times)
+    row[f"Min Deocde Time For {max_new_tokens-1} Tokens (s)"] = min(total_decode_times)
 
 def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
@@ -338,10 +353,15 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
+def set_compression(compression, model):
+    for layer in model.model.layers: 
+        layer.set_compression(compression)
+
+
 def create_csv_data(sequence_length, iters, max_new_tokens):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-2.7B' ]
+    # models = [ 'ridger/MMfreeLM-2.7B' , 'microsoft/bitnet-b1.58-2B-4T' ]
+    models = [ 'ridger/MMfreeLM-2.7B' ]
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -353,38 +373,37 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
         for model_name in models:
             row = {'device': device, 'model': model_name}
             print(f"Collecting data for model: {model_name}")
-            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-            for batch_power in range(min_batch_power, max_batch_power):
-                batch_size = 2**batch_power
-                row['batch size'] = batch_size
-                print(f"\tCollecting data for batch size: {batch_size}")
-                print(f"\t\tRunning Benchmarks...")
-                # start_time = time.time()
-                # benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                # end_time = time.time()
-                # print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+            for packed in [True, False]:
+                model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+                if 'ridger' in model_name:
+                    model = model.half()
+                set_compression(packed, model)
+                row["Weight Packing"] = packed 
+                for batch_power in reversed(range(min_batch_power, max_batch_power)):
+                    batch_size = 2**batch_power
+                    row['batch size'] = batch_size
+                    print(f"\tCollecting data for batch size: {batch_size}")
+                    print(f"\t\tRunning Benchmarks...")
+                    start_time = time.time()
+                    benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                    end_time = time.time()
+                    print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
-                start_time = time.time()
-                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                end_time = time.time()
-                print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+                    start_time = time.time()
+                    detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                    end_time = time.time()
+                    print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
 
-                # print(f"\t\tCollecting time to first token data...")
-                # start_time = time.time()
-                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name, use_dataset_prompts=True))
-                # end_time = time.time()
-                # print(f"\t\t\tTime fo first token completed in {end_time-start_time} sec")
+                    
+                    if(first_row):
+                        csvwriter = csv.DictWriter(csvfile, row.keys())
+                        csvwriter.writeheader()
+                        first_row = False
+                    csvwriter.writerow(row) 
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
 
-                # print("\t\t Collecting Power data")
-                # start_time = time.time()
-                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                # end_time = time.time()
-                # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
-                if(first_row):
-                    csvwriter = csv.DictWriter(csvfile, row.keys())
-                    csvwriter.writeheader()
-                    first_row = False
-                csvwriter.writerow(row) 
         print(f"Data written to {filename}")
 
 def main():

@@ -434,7 +434,8 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
         prenorm=False,
         residual_in_fp32=False,
         is_rms_norm=False,
-        scale=None
+        scale=None, 
+        compress_weights=True
     ):
         annotation_name = "LayerNormLinearQuantFn"
         if(residual != None):
@@ -552,6 +553,7 @@ def layer_norm_linear_quant_fn(
     residual_in_fp32=False,
     is_rms_norm=False,
     scale=None,
+    compress_weights=True
 ):
     return LayerNormLinearQuantFn.apply(
         x,
@@ -565,6 +567,7 @@ def layer_norm_linear_quant_fn(
         residual_in_fp32,
         is_rms_norm,
         scale,
+        compress_weights
     )
 
 
@@ -613,8 +616,6 @@ class BitLinear(nn.Linear):
 
             return y
 
-compress_weights = True
-test_compression = False 
 class FusedBitLinear(BitLinear):
     """
     A custom linear layer that applies quantization on both activations and weights.
@@ -635,6 +636,8 @@ class FusedBitLinear(BitLinear):
         self.cached_weights = None
         self.cached_scale = None
         self.compressed_weights = None
+        self.compress_weights = True
+        self.test_compression = False 
 
     def increase_size(self, in_multiplier, out_multiplier):
         weight_dimension_out, weight_dimension_in = self.weight.shape
@@ -656,9 +659,9 @@ class FusedBitLinear(BitLinear):
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
                 del self.weight
-                if compress_weights: 
+                if self.compress_weights: 
                     self.compressed_weights = pack_weights(self.cached_weights)
-                    if test_compression: 
+                    if self.test_compression: 
                         unpacked_weights = unpack_weights(self.compressed_weights, self.cached_weights.dtype)
                         if torch.equal(unpacked_weights, self.cached_weights):
                             print("Weight compression is incorrect")
@@ -669,24 +672,16 @@ class FusedBitLinear(BitLinear):
 
                     del self.cached_weights
                     torch.cuda.empty_cache()
-            if compress_weights:
-                return layer_norm_linear_quant_fn(
-                    x,
-                    self.norm.weight,
-                    self.norm.bias,
-                    self.compressed_weights,
-                    self.bias,
-                    is_rms_norm=True, 
-                    scale=self.cached_scale
-                )
+            active_weights = self.compressed_weights if self.compress_weights else self.cached_weights
             return layer_norm_linear_quant_fn(
                 x,
                 self.norm.weight,
                 self.norm.bias,
-                self.cached_weights,
+                active_weights,
                 self.bias,
                 is_rms_norm=True, 
-                scale=self.cached_scale
+                scale=self.cached_scale, 
+                compress_weights=self.compress_weights
             )
 
 VALUES_PER_ITEM = 4
