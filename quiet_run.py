@@ -99,11 +99,6 @@ logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-# 2. Suppress HuggingFace Hub logging (where shard-loading prints originate)
-logging.set_verbosity_error()
-logging.disable_default_handler()
-logging.disable_propagation()
-
 model_name = args.model_name
 num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)

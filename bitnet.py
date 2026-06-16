@@ -145,6 +145,8 @@ class BitLinear(nn.Module):
             self.register_buffer("bias", torch.zeros((out_features), dtype=dtype, device=device))
         else:
             self.bias = None
+        self.compress_weights = False
+        self.active_weights = None
 
     @torch.compile
     def activation_quant(self, input, num_bits=8):
@@ -177,11 +179,20 @@ class BitLinear(nn.Module):
 
     def forward(self, input):
         with nvtx.annotate("BitLinear Forward", color="pink"):
-            w = self.weight
+            if self.active_weights is None:
+                if self.compress_weights:
+                    self.active_weights = self.weight
+                else: 
+                    self.active_weights = unpack_weights(self.weight, dtype=self.dtype)
+                    del self.weight
+            
             with nvtx.annotate("activation quantization", color="orchid"):
                 input_quant, input_scale = self.activation_quant(input)
-            with nvtx.annotate("unpack weights", color="red"):
-                w_quant = unpack_weights(w, dtype=self.dtype)
+            if self.compress_weights:
+                with nvtx.annotate("unpack weights", color="red"):
+                    w_quant = unpack_weights(self.active_weights, dtype=self.dtype)
+            else: 
+                w_quant = self.active_weights
             with nvtx.annotate("ternary matmul", color="cyan"):
                 y = F.linear(input_quant.to(self.dtype), w_quant)
             with nvtx.annotate("post quantization processing", color="teal"):

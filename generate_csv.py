@@ -19,6 +19,14 @@ import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+import transformers.integrations.bitnet as bitnet
+import bitnet as local_bitnet
+
+bitnet.pack_weights = local_bitnet.pack_weights
+bitnet.unpack_weights = local_bitnet.unpack_weights
+bitnet.BitLinear = local_bitnet.BitLinear
+bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
+bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -75,6 +83,12 @@ parser.add_argument(
     action='store_true',
     default=False,
     help="prints csv after creating data"
+)
+
+parser.add_argument(
+    "--model", 
+    default="ridger/MMfreeLM-2.7B",
+    help="selects model",
 )
 
 args = parser.parse_args()
@@ -359,15 +373,22 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
-def set_compression(compression, model):
+def set_ridger_compression(compression, model):
     for layer in model.model.layers: 
         layer.set_compression(compression)
+def set_bitnet_compression(compression, model):
+    for layer in model.model.layers:
+        layer.self_attn.q_proj.compress_weights = compression
+        layer.self_attn.k_proj.compress_weights = compression
+        layer.self_attn.v_proj.compress_weights = compression
+        layer.self_attn.o_proj.compress_weights = compression
 
+        layer.mlp.gate_proj.compress_weights = compression
+        layer.mlp.up_proj.compress_weights = compression
+        layer.mlp.down_proj.compress_weights = compression
 
-def create_csv_data(sequence_length, iters, max_new_tokens):
+def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/MMfreeLM-2.7B'):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    # models = [ 'ridger/MMfreeLM-2.7B' , 'microsoft/bitnet-b1.58-2B-4T' ]
-    models = [ 'ridger/MMfreeLM-2.7B' ]
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
@@ -376,42 +397,43 @@ def create_csv_data(sequence_length, iters, max_new_tokens):
     filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        for model_name in models:
-            row = {'device': device, 'model': model_name}
-            print(f"Collecting data for model: {model_name}")
-            for packed in [True, False]:
-                model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-                if 'ridger' in model_name:
-                    model = model.half()
-                set_compression(packed, model)
-                row["Weight Packing"] = packed 
-                for batch_power in reversed(range(min_batch_power, max_batch_power)):
-                    batch_size = 2**batch_power
-                    row['batch size'] = batch_size
-                    print(f"\tCollecting data for batch size: {batch_size}")
-                    print(f"\t\tRunning Benchmarks...")
-                    start_time = time.time()
-                    benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                    end_time = time.time()
-                    print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
+        row = {'device': device, 'model': model_name}
+        print(f"Collecting data for model: {model_name}")
+        for packed in [True, False]:
+            model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+            if 'ridger' in model_name:
+                model = model.half()
+                set_ridger_compression(packed, model)
+            if 'bitnet' in model_name: 
+                set_bitnet_compression(packed, model)
+            row["Weight Packing"] = packed 
+            for batch_power in reversed(range(min_batch_power, max_batch_power)):
+                batch_size = 2**batch_power
+                row['batch size'] = batch_size
+                print(f"\tCollecting data for batch size: {batch_size}")
+                print(f"\t\tRunning Benchmarks...")
+                start_time = time.time()
+                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                end_time = time.time()
+                print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
-                    start_time = time.time()
-                    detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
-                    end_time = time.time()
-                    print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+                start_time = time.time()
+                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                end_time = time.time()
+                print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
 
-                    
-                    if(first_row):
-                        csvwriter = csv.DictWriter(csvfile, row.keys())
-                        csvwriter.writeheader()
-                        first_row = False
-                    csvwriter.writerow(row) 
-                del model
-                gc.collect()
-                torch.cuda.empty_cache()
+                
+                if(first_row):
+                    csvwriter = csv.DictWriter(csvfile, row.keys())
+                    csvwriter.writeheader()
+                    first_row = False
+                csvwriter.writerow(row) 
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
 
         print(f"Data written to {filename}")
-    if print_csv:
+    if args.print_csv:
         with open(filename, "r") as file:
             print(file.read())
 
@@ -424,7 +446,7 @@ def main():
     iters=int(args.iterations)
     max_new_tokens=int(args.max_new_tokens)
     
-    create_csv_data(sequence_length, iters, max_new_tokens)
+    create_csv_data(sequence_length, iters, max_new_tokens, model_name=args.model)
 
 if __name__ == "__main__":
     main()

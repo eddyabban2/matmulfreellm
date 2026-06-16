@@ -1,8 +1,13 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import torch
 from utils import generate_dataset_input_ids
 import transformers.integrations.bitnet as bitnet
 import bitnet as local_bitnet
+import gc 
+
+logging.set_verbosity_error()
+logging.disable_default_handler()
+logging.disable_propagation()
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -57,17 +62,29 @@ def estimate_model_memory(model, verbose=True):
     print(f"\nTotal parameter memory : {total_param_bytes/1e9:.3f} GB")
     print(f"\nTotal buffer memory : {total_buffer_bytes/1e9:.3f} GB")
     return total_bytes
-
+gc.collect()
+torch.cuda.empty_cache()
 # Also check live GPU allocation (if on CUDA)
-print(f"GPU allocated : {torch.cuda.memory_allocated()/1e9:.3f} GB")
-print(f"GPU reserved  : {torch.cuda.memory_reserved()/1e9:.3f} GB")
+print(f"GPU allocated before warmup: {torch.cuda.memory_allocated()/1e9:.3f} GB")
+print(f"GPU reserved  before warmup: {torch.cuda.memory_reserved()/1e9:.3f} GB")
 
 # HuggingFace convenience method (if using transformers)
-print(model.get_memory_footprint())
-print(f"model size memory: {estimate_model_memory(model,verbose=True)}")
+# print(f"model size memory: {estimate_model_memory(model,verbose=True)}")
+
+
+_ = model.generate(
+    input_ids=input_ids,
+    attention_mask=attention_mask,
+    max_new_tokens=1,
+    do_sample=True,
+    top_p=0.4,
+    temperature=0.6)
+gc.collect()
+torch.cuda.empty_cache()
+print(f"GPU allocated after warmup: {torch.cuda.memory_allocated()/1e9:.3f} GB")
+print(f"GPU reserved  after warmup: {torch.cuda.memory_reserved()/1e9:.3f} GB")
 
 for _ in range(10):
-
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
