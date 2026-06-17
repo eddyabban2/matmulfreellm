@@ -413,16 +413,14 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                 print(f"\tCollecting data for batch size: {batch_size}")
                 print(f"\t\tRunning Benchmarks...")
                 start_time = time.time()
-                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                 end_time = time.time()
                 print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
                 start_time = time.time()
-                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=True)
+                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                 end_time = time.time()
                 print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
-
-                
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()
