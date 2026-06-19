@@ -2,14 +2,13 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    torchrun --nproc_per_node=2 pipelined_performance_eval.py -s 100 -m 20 -w 1.5 -l 1.5 --max_new_tokens 100 --min_batch_power 0 --max_batch_power 5
+    torchrun --nproc_per_node=2 pipelined_performance_eval.py -s 100 -m 5 -w 1.5 -l 1.5 --max_new_tokens 10 --min_batch_power 0 --max_batch_power 2
 """
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
 import torch.distributed as dist
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import transformers
@@ -19,6 +18,7 @@ from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
 from utils import generate_random_input_ids, generate_dataset_input_ids
 from pipeline_mmfreelm import PipelineParallelMatMulFreeLM
+import gc
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -50,6 +50,13 @@ parser.add_argument(
     "-l", 
     "--layers_multiplier",
     default=0.5,
+    help="sets the number  we multiply the number of layers by"
+)
+
+parser.add_argument(
+    "-v", 
+    "--vocab_multiplier",
+    default=1.5,
     help="sets the number  we multiply the number of layers by"
 )
 
@@ -137,7 +144,7 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         monitor = ZeusMonitor(gpu_indices=devices)
         window_key = "generate pipeline"
 
-    pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=max_new_tokens)
+    pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=1)
     
     for _ in range(num_iterations):
         start_time = time.time()
@@ -221,6 +228,7 @@ def create_csv_data(
         count_micro_batches, 
         weight_multiplier, 
         layers_multiplier, 
+        vocab_multiplier, 
         collect_power_data=False,
         print_csv=False):
 
@@ -229,36 +237,49 @@ def create_csv_data(
     from datetime import datetime
     current_time = datetime.now()
     filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
-    pipelined_model = PipelineParallelMatMulFreeLM(weight_multiplier=weight_multiplier, layers_multiplier=layers_multiplier)  
-    device = pipelined_model.device
-    world_size = int(os.environ.get("WORLD_SIZE", 2))
+    devices = ""
+    for i in range(torch.cuda.device_count()): 
+        devices += (torch.cuda.get_device_name(i))
+        if i < torch.cuda.device_count()-1: devices += ","
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         original_hidden_layer_size = 2560
         original_num_layers = 32
-        memory_usage = 0
-        for device in range(world_size): 
-            memory_usage += torch.cuda.memory_allocated(device=device)
-        row = {
-            'device': device, 
-            'Hiden Layer Size': original_hidden_layer_size*weight_multiplier, 
-            'Number of Layers': original_num_layers*layers_multiplier, 
-            'DRAM Bytes From Model (Bytes)': memory_usage}
-        for batch_power in reversed(range(min_batch_power, max_batch_power)):
-            batch_size = 2**batch_power
-            row['Batch Size'] = batch_size
-            print(f"\tCollecting data for batch size: {batch_size}")
-            print(f"\t\tRunning Benchmarks...")
-
-            benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=collect_power_data)
-            time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
-            if rank == 0:
-                if(first_row):
-                    csvwriter = csv.DictWriter(csvfile, row.keys())
-                    csvwriter.writeheader()
-                    first_row = False
-                csvwriter.writerow(row) 
-        print(f"Data written to {filename}")
+        for weight_compression in [True, False]:
+            pipelined_model = PipelineParallelMatMulFreeLM(
+                weight_multiplier=weight_multiplier,
+                layers_multiplier=layers_multiplier, 
+                vocab_size_multiplier=vocab_multiplier, 
+                weight_compression=weight_compression)  
+            memory_usage = 0
+            world_size = int(os.environ.get("WORLD_SIZE", 2))
+            for device in range(world_size):
+                print(f'Memory Allocated on Device: {device}: {torch.cuda.memory_allocated(device=device)}')
+                memory_usage += torch.cuda.memory_allocated(device=device)
+            row = {
+                'device': devices, 
+                'Hidden Layer Size': original_hidden_layer_size*weight_multiplier, 
+                'Number of Layers': original_num_layers*layers_multiplier, 
+                'DRAM Bytes From Model (Bytes)': memory_usage, 
+                'Weight Compression' : weight_compression}
+            for batch_power in reversed(range(min_batch_power, max_batch_power)):
+                batch_size = 2**batch_power
+                row['Batch Size'] = batch_size
+                print(f"\tCollecting data for batch size: {batch_size}")
+                print(f"\t\tRunning Benchmarks...")
+                benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=collect_power_data)
+                time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
+                if rank == 0:
+                    if(first_row):
+                        csvwriter = csv.DictWriter(csvfile, row.keys())
+                        csvwriter.writeheader()
+                        first_row = False
+                    csvwriter.writerow(row) 
+            del pipelined_model
+            gc.collect()
+            torch.cuda.empty_cache()
+        if rank == 0:
+            print(f"Data written to {filename}")
     if print_csv:
         with open(filename, "r") as file:
             print(file.read())
@@ -273,10 +294,11 @@ def main():
     count_micro_batches=int(args.micro_batches)
     weight_multiplier=float(args.weight_multiplier)
     layers_multiplier=float(args.layers_multiplier)
+    vocab_multiplier=float(args.vocab_multiplier)
     collect_power_data= args.collect_power_data
     print_csv = args.print_csv
 
-    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier, collect_power_data=collect_power_data, print_csv=print_csv)
+    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier, vocab_multiplier, collect_power_data=collect_power_data, print_csv=print_csv)
 
 if __name__ == "__main__":
     main()

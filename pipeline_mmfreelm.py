@@ -7,9 +7,11 @@ import torch.distributed as dist
 import torch.nn as nn
 import nvtx
 import copy 
+import sys
 from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import random
+import gc 
 from utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
@@ -23,7 +25,9 @@ if __name__ == '__main__':
 
 
 class PipelineParallelMatMulFreeLM:
-    def __init__(self, layers_multiplier=1, weight_multiplier=1, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
+    def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=True, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
+        if vocab_size_multiplier < 1:
+            sys.exit("Vocab multiplier's smaller than 1 are unsupported")
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -55,12 +59,13 @@ class PipelineParallelMatMulFreeLM:
         self.lm_head = None
         
         if self.rank == 0:
-            if weight_multiplier == 1: 
+            if weight_multiplier == 1 and vocab_size_multiplier == 1: 
                 self.embeddings = full_model.model.embeddings.to(self.device)
             else: 
                 hidden_size = int(2560*weight_multiplier)
+                vocab_size = int(full_model.vocab_size*vocab_size_multiplier)
                 self.embeddings = nn.Embedding(
-                    num_embeddings=full_model.vocab_size, 
+                    num_embeddings=vocab_size, 
                     embedding_dim=hidden_size, 
                     padding_idx=full_model.model.padding_idx, 
                     device=self.device)
@@ -69,9 +74,9 @@ class PipelineParallelMatMulFreeLM:
         if self.rank == self.world_size - 1:
             self.norm = full_model.model.norm.to(self.device)
             self.lm_head = full_model.lm_head.to(self.device)
-            if weight_multiplier != 1:
+            if weight_multiplier != 1 or vocab_size_multiplier != 1:
                 self.norm.increase_size(weight_multiplier)
-                self.lm_head.increase_size(weight_multiplier, 1)
+                self.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
         model_layers = []
         if layers_multiplier == 1:
             model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
@@ -86,12 +91,12 @@ class PipelineParallelMatMulFreeLM:
         )
         if weight_multiplier != 1: 
             for idx, layer in enumerate(self.local_layers): 
-                layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier)
-                layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier)
-                layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier)
-                layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier)
-                layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier)
-                layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier)
+                layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
 
                 layer.attn_norm.increase_size(weight_multiplier)
                 layer.mlp_norm.increase_size(weight_multiplier)
@@ -266,10 +271,12 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1.5
-    weight_multiplier = 1
+    layers_multiplier = 2
+    weight_multiplier = 2
+    vocab_size_multiplier = 1.5
     print_model_config = True
-    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, model_id=MODEL_ID, print_model_config=print_model_config)
+    use_weight_compression = False
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)
 
     num_micro_batches = 7
     batch_size_per_mb = 5
@@ -288,7 +295,14 @@ def main():
             )
     print("generated input tokens")
     dist.barrier()
+    print("running warmup")
+    for _ in range(100):
+        outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=1)
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("finished running warmup runnning workload")
     print("attempting to run pipeline")
+    dist.barrier()
 
     outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=max_new_tokens)
     print(f"Outputs of Model: {outputs}")
