@@ -657,10 +657,6 @@ class FusedBitLinear(BitLinear):
 
     def compress_weights(self):
         self.compressed_weights = pack_weights(self.cached_weights)
-        print(f"cached weights: {self.cached_weights}")
-        print(f"cached weights shape: {self.cached_weights.shape}")
-        print(f"compressed weights: {self.compressed_weights}")
-        print(f"compressed weights shape: {self.compressed_weights.shape}")
         if self.test_compression: 
             unpacked_weights = unpack_weights(self.compressed_weights, self.cached_weights.dtype)
             if torch.equal(unpacked_weights, self.cached_weights):

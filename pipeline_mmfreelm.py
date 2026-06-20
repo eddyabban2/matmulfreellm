@@ -271,13 +271,15 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 2
+    layers_multiplier = 1
     weight_multiplier = 2
     vocab_size_multiplier = 1.5
-    print_model_config = True
-    use_weight_compression = False
+    print_model_config = False
+    use_weight_compression = True
     pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)
-
+    memory_bytes = torch.cuda.memory_allocated()
+    memory_gb = memory_bytes / (1024 ** 3)
+    print(f"GPU memory usage: {memory_gb:.2f} GB")
     num_micro_batches = 7
     batch_size_per_mb = 5
     sequence_length = 20

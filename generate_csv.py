@@ -326,6 +326,20 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
     row ["CPU_time_seconds"] = cpu_time
     row["CUDA_time_seconds"] = cuda_time
 
+def run_warmup(model, model_name):
+    batch = generate_random_input_ids(model_name, 1, 1)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+
+    # run a warm up generate 
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=1,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+
 def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
@@ -407,6 +421,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
             if 'bitnet' in model_name: 
                 set_bitnet_compression(packed, model)
             row["Weight Packing"] = packed 
+            run_warmup(model, model_name)
+            row["Memory Usage"] = torch.cuda.memory_allocated()/(1024**3)
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size

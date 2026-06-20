@@ -87,13 +87,13 @@ class HGRNBitBlock(nn.Module):
             hidden_act=config.hidden_act
         )
     def set_compression(self, compression):
-        self.attn.i_proj.compress_weights = compression
-        self.attn.f_proj.compress_weights = compression
-        self.attn.g_proj.compress_weights = compression
-        self.attn.o_proj.compress_weights = compression
+        self.attn.i_proj.use_compressed_weights = compression
+        self.attn.f_proj.use_compressed_weights = compression
+        self.attn.g_proj.use_compressed_weights = compression
+        self.attn.o_proj.use_compressed_weights = compression
 
-        self.mlp.gate_proj.compress_weights = compression
-        self.mlp.down_proj.compress_weights = compression
+        self.mlp.gate_proj.use_compressed_weights = compression
+        self.mlp.down_proj.use_compressed_weights = compression
 
 
     def forward(
