@@ -255,12 +255,12 @@ def create_csv_data(
             world_size = int(os.environ.get("WORLD_SIZE", 2))
             for device in range(world_size):
                 print(f'Memory Allocated on Device: {device}: {torch.cuda.memory_allocated(device=device)}')
-                memory_usage += torch.cuda.memory_allocated(device=device)
+                memory_usage += torch.cuda.memory_allocated(device=device) 
             row = {
                 'device': devices, 
                 'Hidden Layer Size': original_hidden_layer_size*weight_multiplier, 
                 'Number of Layers': original_num_layers*layers_multiplier, 
-                'DRAM Bytes From Model (Bytes)': memory_usage, 
+                'DRAM Bytes From Model (Bytes)': memory_usage/(1024**3), 
                 'Weight Compression' : weight_compression}
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
