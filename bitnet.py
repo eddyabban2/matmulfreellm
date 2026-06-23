@@ -145,7 +145,7 @@ class BitLinear(nn.Module):
             self.register_buffer("bias", torch.zeros((out_features), dtype=dtype, device=device))
         else:
             self.bias = None
-        self.compress_weights = False
+        self.compress_weights = True
         self.active_weights = None
 
     @torch.compile

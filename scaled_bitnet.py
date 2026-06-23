@@ -49,67 +49,52 @@ standard_model_config = BitNetConfig(
 )
 
 def create_custom_bitnet(model_config=standard_model_config):
-    print("attempting to load model")
     model = BitNetForCausalLM(model_config)
     model = model.to(torch.bfloat16)
-
-    print(model_config.quantization_config)
 
     bitnet.replace_with_bitnet_linear(
         model, 
         quantization_config=model_config.quantization_config
     )
-
-    memory_limits = {
-        0: "10GiB",   # Limit GPU 0
-        1: "10GiB",   # Limit GPU 1
-        "cpu": "60GiB" # Fallback CPU RAM
-    }
-
-    device_map = infer_auto_device_map(
-        model, 
-        no_split_module_classes=["BitNetDecoderLayer"], 
-        max_memory=memory_limits
-    )
-
-    print(f"Device Map:\n{device_map}\n")
-
-    model = dispatch_model(model, device_map=device_map)
-    print(model)
+    model.cuda()
     return model
 
-model = create_custom_bitnet()
-prompts = [
-    "Explain the concept of quantum computing.",
-    "Write a short story about a space explorer.",
-    "What is the capital of France?",
-    "How does BitNet work?", 
-    "Eddy was here"
-]
+def main():
+    model_config = standard_model_config
+    model_config.num_hidden_layers = 50
+    model = create_custom_bitnet(model_config=model_config)
+    prompts = [
+        "Explain the concept of quantum computing.",
+        "Write a short story about a space explorer.",
+        "What is the capital of France?",
+        "How does BitNet work?", 
+        "Eddy was here"
+    ]
 
-tokenizer = AutoTokenizer.from_pretrained("microsoft/bitnet-b1.58-2B-4T") 
-tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/bitnet-b1.58-2B-4T") 
+    tokenizer.pad_token = tokenizer.eos_token
 
-inputs = tokenizer(prompts, return_tensors="pt", padding=True).to("cuda:0")
-gc.collect()
-torch.cuda.empty_cache()
-memory_usage = torch.cuda.memory_allocated()
-print(f"Memory Usage: {memory_usage/(1024**3)} GiB") 
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True).to("cuda:0")
+    gc.collect()
+    torch.cuda.empty_cache()
+    memory_usage = torch.cuda.memory_allocated()
+    print(f"Memory Usage: {memory_usage/(1024**3)} GiB") 
 
-print(f"Processing batch of {len(prompts)} prompts...")
+    print(f"Processing batch of {len(prompts)} prompts...")
 
-# Inference
-with nvtx.annotate("workload", color="cyan"):
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs, 
-            max_new_tokens=50, 
-            do_sample=True,
-            pad_token_id=tokenizer.pad_token_id
-        )
+    # Inference
+    with nvtx.annotate("workload", color="cyan"):
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs, 
+                max_new_tokens=50, 
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id
+            )
 
-# Decode results
-for i, output in enumerate(outputs):
-    print(f"\n--- Output {i+1} ---\n{tokenizer.decode(output, skip_special_tokens=True)}")
+    # Decode results
+    for i, output in enumerate(outputs):
+        print(f"\n--- Output {i+1} ---\n{tokenizer.decode(output, skip_special_tokens=True)}")
 
-
+if __name__ == "__main__":
+    main()
