@@ -21,6 +21,7 @@ import csv
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import transformers.integrations.bitnet as bitnet
 import bitnet as local_bitnet
+import mmfreelm
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -32,71 +33,7 @@ parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
 )
 
-parser.add_argument(
-    "-s", 
-    "--sequence_length",
-    default=32,
-    help="sets the sequence length of input tokens"
-)
 
-parser.add_argument( 
-    "--max_new_tokens",
-    default=2,
-    help="sets the sequence length of input tokens"
-)
-
-parser.add_argument(
-    "-i", 
-    "--iterations",
-    default=5,
-    help="Determines the number of iterations to benchmark for"
-)
-
-parser.add_argument (
-    "-f",
-    "--fixed_point",
-    action="store_true",
-    help="Switches the model to fixed point",
-)
-
-parser.add_argument(
-    "--min_batch_power", 
-    default=0,
-    help="stores the minimum batch power to go up to when profiling",
-)
-
-parser.add_argument(
-    "--max_batch_power", 
-    default=1,
-    help="stores the maximum batch power to go up to when profiling",
-)
-
-parser.add_argument(
-    "--use_original",
-    action='store_true',
-    default=False,
-    help="changes the model to using the original implementation"
-)
-
-parser.add_argument(
-    "--print_csv",
-    action='store_true',
-    default=False,
-    help="prints csv after creating data"
-)
-
-parser.add_argument(
-    "--model", 
-    default="ridger/MMfreeLM-2.7B",
-    help="selects model",
-)
-
-args = parser.parse_args()
-
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
 
 logging.set_verbosity_error()
 logging.disable_default_handler()
@@ -463,4 +400,68 @@ def main():
     create_csv_data(sequence_length, iters, max_new_tokens, model_name=args.model)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="creates a csv file with benchmark results"
+    )
+
+    parser.add_argument(
+        "-s", 
+        "--sequence_length",
+        default=32,
+        help="sets the sequence length of input tokens"
+    )
+
+    parser.add_argument( 
+        "--max_new_tokens",
+        default=2,
+        help="sets the sequence length of input tokens"
+    )
+
+    parser.add_argument(
+        "-i", 
+        "--iterations",
+        default=5,
+        help="Determines the number of iterations to benchmark for"
+    )
+
+    parser.add_argument (
+        "-f",
+        "--fixed_point",
+        action="store_true",
+        help="Switches the model to fixed point",
+    )
+
+    parser.add_argument(
+        "--min_batch_power", 
+        default=0,
+        help="stores the minimum batch power to go up to when profiling",
+    )
+
+    parser.add_argument(
+        "--max_batch_power", 
+        default=1,
+        help="stores the maximum batch power to go up to when profiling",
+    )
+
+    parser.add_argument(
+        "--use_original",
+        action='store_true',
+        default=False,
+        help="changes the model to using the original implementation"
+    )
+
+    parser.add_argument(
+        "--print_csv",
+        action='store_true',
+        default=False,
+        help="prints csv after creating data"
+    )
+
+    parser.add_argument(
+        "--model", 
+        default="ridger/MMfreeLM-2.7B",
+        help="selects model",
+    )
+
+    args = parser.parse_args()
     main()
