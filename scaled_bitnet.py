@@ -59,9 +59,32 @@ def create_custom_bitnet(model_config=standard_model_config):
     model.cuda()
     return model
 
+def print_bitlinear_shapes(model: torch.nn.Module):
+    """
+    Walks through the model, finds every BitLinear layer and prints its
+    full hierarchical name together with the weight (and bias, if any) shape.
+    """
+    # Import the class we just patched so `isinstance` works
+    BitLinearClass = local_bitnet.BitLinear
+
+    print("\n=== BitLinear layer dimensions ===")
+    for name, module in model.named_modules():
+        # `isinstance` works because we replaced the original Linear with our class
+        if isinstance(module, BitLinearClass):
+            # Most BitLinear objects have a `.weight` attribute (torch.nn.Parameter)
+            # print(dir(module))
+            # print(module.weight)
+            w_shape = tuple(module.weight.shape) if hasattr(module, "weight") else "N/A"
+            w_shape = tuple([w_shape[0]*4, w_shape[1]])
+            # Bias is optional – many BitLinear layers are bias‑less
+            b_shape = (
+                tuple(module.bias.shape) if hasattr(module, "bias") and module.bias is not None else "None"
+            )
+            print(f"{name}  weight: {w_shape}  bias: {b_shape}")
+    print("=== End of BitLinear dimensions ===\n")
+
 def main():
     model_config = standard_model_config
-    model_config.num_hidden_layers = 50
     model = create_custom_bitnet(model_config=model_config)
     prompts = [
         "Explain the concept of quantum computing.",
@@ -79,8 +102,20 @@ def main():
     torch.cuda.empty_cache()
     memory_usage = torch.cuda.memory_allocated()
     print(f"Memory Usage: {memory_usage/(1024**3)} GiB") 
-
     print(f"Processing batch of {len(prompts)} prompts...")
+    print(model)
+    print_bitlinear_shapes(model)
+
+    # Assuming 'model' is your PyTorch nn.Module instance
+
+    # 1. Total parameters (including frozen/non-trainable layers)
+    total_params = sum(p.numel() for p in model.parameters())
+
+    # 2. Trainable parameters only (those updated by the optimizer)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    print(f"Total Parameters: {total_params:,}")
+    print(f"Trainable Parameters: {trainable_params:,}")
 
     # Inference
     with nvtx.annotate("workload", color="cyan"):
