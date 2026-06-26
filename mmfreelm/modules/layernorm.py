@@ -615,10 +615,12 @@ class RMSNorm(nn.Module):
         s += ")"
         return s
 
-    def increase_size(self, multiplier):
+    def increase_size(self, multiplier, device=None):
+        if device is None: 
+            device=self.weight.device
         self.hidden_size *= multiplier
         self.hidden_size = int(self.hidden_size)
-        self.weight = nn.Parameter(torch.rand(int(self.hidden_size), device=self.weight.device))
+        self.weight = nn.Parameter(torch.rand(int(self.hidden_size), device=device))
 
     def forward(self, x, residual=None, prenorm=False, residual_in_fp32=False):
         return rms_norm_fn(

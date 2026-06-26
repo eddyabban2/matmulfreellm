@@ -82,7 +82,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_batch_power", 
-    default=3,
+    default=1,
     help="stores the maximum batch power to go up to when profiling",
 )
 
@@ -98,6 +98,20 @@ parser.add_argument(
     action='store_true',
     default=False,
     help="prints csv after creating data"
+)
+
+parser.add_argument(
+    "--disable_compress_weights",
+    action='store_true',
+    default=False,
+    help="disables weight compression"
+)
+
+parser.add_argument(
+    "--disable_uncompress_weights",
+    action='store_true',
+    default=False,
+    help="performs a run without weight compression"
 )
 
 args = parser.parse_args()
@@ -236,6 +250,7 @@ def create_csv_data(
         weight_multiplier, 
         layers_multiplier, 
         vocab_multiplier, 
+        weight_compression_settings,
         collect_power_data=False,
         print_csv=False):
 
@@ -255,7 +270,7 @@ def create_csv_data(
         csvwriter = None  
         original_hidden_layer_size = 2560
         original_num_layers = 32
-        for weight_compression in [True]:
+        for weight_compression in weight_compression_settings:
             pipelined_model = PipelineParallelMatMulFreeLM(
                 weight_multiplier=weight_multiplier,
                 layers_multiplier=layers_multiplier, 
@@ -264,7 +279,7 @@ def create_csv_data(
             memory_usage = 0
             world_size = int(os.environ.get("WORLD_SIZE", 2))
             for device in range(world_size):
-                print(f'Memory Allocated on Device: {device}: {torch.cuda.memory_allocated(device=device)}')
+                print(f'Memory Allocated on Device: {device}: {(torch.cuda.memory_allocated(device=device))/(1024**3)}')
                 memory_usage += torch.cuda.memory_allocated(device=device) 
             row = {
                 'device': devices, 
@@ -304,10 +319,15 @@ def main():
     weight_multiplier=float(args.weight_multiplier)
     layers_multiplier=float(args.layers_multiplier)
     vocab_multiplier=float(args.vocab_multiplier)
+    weight_compression_settings = [True,False]
+    if args.disable_compress_weights:
+        weight_compression_settings.remove(True)
+    if args.disable_uncompress_weights:
+        weight_compression_settings.remove(False)
     collect_power_data= args.collect_power_data
     print_csv = args.print_csv
 
-    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier, vocab_multiplier, collect_power_data=collect_power_data, print_csv=print_csv)
+    create_csv_data(sequence_length, max_new_tokens, iters, min_batch_power, max_batch_power, count_micro_batches, weight_multiplier, layers_multiplier, vocab_multiplier, weight_compression_settings, collect_power_data=collect_power_data, print_csv=print_csv)
 
 if __name__ == "__main__":
     main()

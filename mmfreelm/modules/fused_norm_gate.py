@@ -526,6 +526,8 @@ class FusedRMSNormSwishGate(torch.nn.Module):
 
     def reset_parameters(self):
         torch.nn.init.ones_(self.weight)
+    def increase_size(self, weight_multiplier):
+        self.weight = torch.nn.Parameter(torch.empty(int(self.weight.size(0)*weight_multiplier)))
 
     def forward(self, x, o, residual=None, prenorm=False, residual_in_fp32=False):
         return rms_norm_fn(

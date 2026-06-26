@@ -639,12 +639,20 @@ class FusedBitLinear(BitLinear):
         self.compressed_weights = None
         self.use_compressed_weights = True
         self.test_compression = False 
+    def _apply(self, fn):
+        super()._apply(fn)
+        if hasattr(self, 'compressed_weights') and self.compressed_weights is not None:
+            self.compressed_weights = fn(self.compressed_weights)
+        if hasattr(self, 'cached_weights') and self.cached_weights is not None:
+            self.cached_weights = fn(self.cached_weights)
+        return self
 
     def increase_size(self, in_multiplier, out_multiplier, compress_weights=True):
         weight_dimension_out, weight_dimension_in = self.weight.shape
         weight_dimension_in *= in_multiplier
         weight_dimension_out *= out_multiplier
         device = self.weight.device 
+        # print(f"device weight: {device}")
         dtype = self.weight.dtype
         del self.weight
         torch.cuda.empty_cache()
@@ -652,16 +660,20 @@ class FusedBitLinear(BitLinear):
         self.cached_weights = torch.randint(
             -1, 2, 
             (int(weight_dimension_out), int(weight_dimension_in)), 
-            device=device, 
+            device='cpu', 
             dtype=dtype
         )
         self.cached_scale = 0.412
         self.in_features = int(weight_dimension_in)
         self.out_features = int(weight_dimension_out)
-        self.norm.increase_size(in_multiplier)
+        self.norm.increase_size(in_multiplier, device=device)
         self.use_compressed_weights = compress_weights
         if self.use_compressed_weights:
             self.compress_weights()
+            self.compressed_weights = self.compressed_weights.to(device)
+            
+        else:
+            self.cached_weights = self.cached_weights.to(device) 
 
     def compress_weights(self):
         self.compressed_weights = pack_weights(self.cached_weights)
@@ -673,7 +685,7 @@ class FusedBitLinear(BitLinear):
             else: 
                 print('Weight Compression passed')
             del unpacked_weights
-        del self.cached_weights
+        self.cached_weights = None
         torch.cuda.empty_cache()
 
     def forward(self, x):

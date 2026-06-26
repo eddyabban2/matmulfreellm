@@ -79,27 +79,29 @@ class PipelineParallelMatMulFreeLM:
                 self.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
         model_layers = []
         if layers_multiplier == 1:
-            model_layers = [copy.deepcopy(full_model.model.layers[i]).to(self.device) 
+            model_layers = [copy.deepcopy(full_model.model.layers[i])
                 for i in range(self.layer_start, self.layer_end)]
-        else: 
-            layer_count = int(layers_multiplier*(self.layer_end-self.layer_start))
+        else:
+            layer_count = int(layers_multiplier * (self.layer_end - self.layer_start))
             for _ in range(layer_count):
-                random_layer_index = random.randint(self.layer_start, self.layer_end-1)
-                model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]).to(self.device))
-        self.local_layers = nn.ModuleList(
-            model_layers
-        )
-        if weight_multiplier != 1: 
-            for idx, layer in enumerate(self.local_layers): 
+                random_layer_index = random.randint(self.layer_start, self.layer_end - 1)
+                model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]))
+
+        self.local_layers = nn.ModuleList(model_layers)
+
+        if weight_multiplier != 1:
+            for layer in self.local_layers:
                 layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
                 layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
                 layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
                 layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
                 layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
                 layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-
                 layer.attn_norm.increase_size(weight_multiplier)
                 layer.mlp_norm.increase_size(weight_multiplier)
+                layer.attn.g_norm.increase_size(weight_multiplier)
+
+        self.local_layers.to(self.device)
         self.past_key_values_dict = {}
         del full_model
         torch.cuda.empty_cache()
@@ -205,7 +207,7 @@ class PipelineParallelMatMulFreeLM:
             return logits
 
     @torch.inference_mode()
-    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=False):
+    def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=True):
         self.clear_cache()
 
         if self.rank == 0 and len(micro_batches) < self.world_size:
@@ -308,11 +310,11 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
-    weight_multiplier = 1
-    vocab_size_multiplier = 1
+    layers_multiplier = 2
+    weight_multiplier = 2
+    vocab_size_multiplier = 4
     print_model_config = True
-    use_weight_compression = True
+    use_weight_compression = False
     pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)
     memory_bytes = torch.cuda.memory_allocated()
     memory_gb = memory_bytes / (1024 ** 3)
