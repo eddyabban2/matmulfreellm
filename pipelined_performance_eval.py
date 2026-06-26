@@ -144,9 +144,13 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         monitor = ZeusMonitor(gpu_indices=devices)
         window_key = "generate pipeline"
 
-    pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=1)
-    
-    for _ in range(num_iterations):
+    print("running warmup")
+    pipelined_model.generate_pipelined(micro_batches[0:world_size], max_new_tokens=1)
+    print("finished warmup")
+    row["Estimated Memory Usage Per GPU Memory Usage (GB)"] = (torch.cuda.memory_allocated())/(1024**3)
+    row["Estimated Total Memory Usage(GB)"] = (torch.cuda.memory_allocated()*world_size)/(1024**3)
+    for i in range(num_iterations):
+        print(f"run iteration: {i}")
         start_time = time.time()
         torch.cuda.synchronize()
         if collect_power_data:
@@ -189,13 +193,16 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
 
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
+    
 
 def time_to_first_token(pipelined_model, batch_size, seq_len, num_iterations, row, num_micro_batches, rank, use_dataset_prompts=False, model_id="ridger/MMfreeLM-2.7B"):
     """Estimate Time to First TOken """
     
     times_to_first_token = []
     micro_batches = []
+    world_size = int(os.environ.get("WORLD_SIZE", 2))
     generate_input_ids = generate_dataset_input_ids if use_dataset_prompts else generate_random_input_ids
+    num_micro_batches = world_size
     if rank == 0: 
         for _ in range(num_micro_batches):
             inputs = generate_input_ids(model_id, batch_size, seq_len)
@@ -206,7 +213,7 @@ def time_to_first_token(pipelined_model, batch_size, seq_len, num_iterations, ro
                 })
     dist.barrier()
 
-    pipelined_model.generate_pipelined(micro_batches[0:2], max_new_tokens=1)
+    pipelined_model.generate_pipelined(micro_batches[0:world_size], max_new_tokens=1)
     
     for _ in range(num_iterations):
         start_time = time.time()
@@ -236,7 +243,10 @@ def create_csv_data(
     rank = int(os.environ.get("RANK", 0))
     from datetime import datetime
     current_time = datetime.now()
-    filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
+    if rank != 0:
+        filename = f"whatever{rank}.csv"
+    else:
+        filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
     devices = ""
     for i in range(torch.cuda.device_count()): 
         devices += (torch.cuda.get_device_name(i))
@@ -245,7 +255,7 @@ def create_csv_data(
         csvwriter = None  
         original_hidden_layer_size = 2560
         original_num_layers = 32
-        for weight_compression in [True, False]:
+        for weight_compression in [True]:
             pipelined_model = PipelineParallelMatMulFreeLM(
                 weight_multiplier=weight_multiplier,
                 layers_multiplier=layers_multiplier, 
@@ -260,7 +270,6 @@ def create_csv_data(
                 'device': devices, 
                 'Hidden Layer Size': original_hidden_layer_size*weight_multiplier, 
                 'Number of Layers': original_num_layers*layers_multiplier, 
-                'DRAM Bytes From Model (Bytes)': memory_usage/(1024**3), 
                 'Weight Compression' : weight_compression}
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power

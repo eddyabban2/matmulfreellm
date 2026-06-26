@@ -23,7 +23,7 @@ import torch.multiprocessing as mp
 if __name__ == '__main__':
     mp.set_start_method('spawn')
 
-
+print_deadlocking_checks = False
 class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=True, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         if vocab_size_multiplier < 1:
@@ -32,7 +32,7 @@ class PipelineParallelMatMulFreeLM:
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         if not dist.is_initialized():
-            timeout = timedelta(seconds=1200)
+            timeout = timedelta(seconds=600)
             torch.cuda.set_device(self.local_rank)
             self.device = torch.device(f"cuda:{self.local_rank}")
             dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
@@ -128,19 +128,33 @@ class PipelineParallelMatMulFreeLM:
                 hidden_states = self.embeddings(input_ids)
             else:
                 shape_tensor = torch.zeros(3, dtype=torch.int64, device=self.device)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] waiting for hidden state shape tensor from {self.rank-1}")
                 dist.recv(shape_tensor, src=self.rank - 1)
-
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] got hidden state shape tensor from {self.rank-1}")
                 hidden_states = torch.zeros(
                     tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.device
                 )
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] waiting for hidden states tensor from {self.rank-1}")
                 dist.recv(hidden_states, src=self.rank - 1)
-
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
                 mask_shape = torch.zeros(2, dtype=torch.int64, device=self.device)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] waiting for attention mask shape tensor from {self.rank-1}")
                 dist.recv(mask_shape, src=self.rank - 1)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
                 attention_mask = torch.zeros(
                     tuple(mask_shape.tolist()), dtype=torch.long, device=self.device
                 )
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] waiting for attention mask tensor from {self.rank-1}")
                 dist.recv(attention_mask, src=self.rank - 1)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
 
             if not is_prefill and attention_mask is not None:
                 attention_mask = torch.ones(
@@ -165,8 +179,12 @@ class PipelineParallelMatMulFreeLM:
 
             if self.rank < self.world_size - 1:
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.device)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] sending shape and hidden to rank {self.rank+1}")
                 dist.send(shape_tensor, dst=self.rank + 1)
                 dist.send(hidden_states, dst=self.rank + 1)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] sent shape and hidden to rank {self.rank+1}")
                 if attention_mask is None:
                     attention_mask = torch.ones(
                         (hidden_states.shape[0], hidden_states.shape[1]),
@@ -174,8 +192,12 @@ class PipelineParallelMatMulFreeLM:
                         device=self.device,
                     )
                 mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.device)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] sending attention mask shape and attention mask to rank {self.rank+1}")
                 dist.send(mask_shape, dst=self.rank + 1)
                 dist.send(attention_mask, dst=self.rank + 1)
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] sent attention mask shape and attention mask to rank {self.rank+1}")
                 return None
 
             hidden_states = self.norm(hidden_states)
@@ -186,12 +208,19 @@ class PipelineParallelMatMulFreeLM:
     def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=False):
         self.clear_cache()
 
+        if self.rank == 0 and len(micro_batches) < self.world_size:
+            sys.exit(f"Number of micro batches is smaller than world size\n\tWorld size: {self.world_size} Micro Batches: {len(micro_batches)}")
+
         num_mbs_tensor = torch.tensor(
             [len(micro_batches) if self.rank == 0 else 0],
             dtype=torch.int64,
             device=self.device,
         )
+        if print_deadlocking_checks:
+            print(f"[{self.rank}] broadcasting number of microbatches {num_mbs_tensor}")
         dist.broadcast(num_mbs_tensor, src=0)
+        if print_deadlocking_checks:
+            print(f"[{self.rank}] finished broadcasting number of microbatches {num_mbs_tensor}")
         num_mbs = num_mbs_tensor.item() 
 
         all_generated_tokens = {mb_id: [] for mb_id in range(num_mbs)}
@@ -209,13 +238,19 @@ class PipelineParallelMatMulFreeLM:
                 bs = 0
 
             bs_tensor = torch.tensor([bs], dtype=torch.int64, device=self.device)
-            dist.broadcast(bs_tensor, src=0)          
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] broadcasting batch size tensor {num_mbs_tensor}")
+            dist.broadcast(bs_tensor, src=0)
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] finished broadcasting batch size tensor {num_mbs_tensor}")
             batch_sizes[mb_id] = bs_tensor.item()
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
             # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
             total_steps = num_mbs * num_tokens + self.world_size - 1
             for step in range(total_steps):
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] on step {step}")
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
@@ -247,9 +282,11 @@ class PipelineParallelMatMulFreeLM:
                                 next_token = torch.multinomial(probs, num_samples=1)
                             else:
                                 next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-
+                        if print_deadlocking_checks:
+                            print(f"[{self.rank}][{step}] broadcasting next token tensor {next_token}")
                         dist.broadcast(next_token, src=self.world_size - 1)
-
+                        if print_deadlocking_checks:
+                            print(f"[{self.rank}][{step}] finished broadcasting next token tensor {next_token}")
                         if self.rank == 0:
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
@@ -323,7 +360,6 @@ def main():
                 print(f"Output Tensor: {generated_tensor[i]}")
 
     dist.destroy_process_group()
-
 
 if __name__ == "__main__":
     main()

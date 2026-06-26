@@ -11,6 +11,7 @@ import nvtx
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
+import gc
 
 
 def activation_quant(x):
@@ -646,7 +647,14 @@ class FusedBitLinear(BitLinear):
         device = self.weight.device 
         dtype = self.weight.dtype
         del self.weight
-        self.cached_weights = torch.randint(-1, 2, (int(weight_dimension_out), int(weight_dimension_in)), device=device).to(dtype)
+        torch.cuda.empty_cache()
+        gc.collect()
+        self.cached_weights = torch.randint(
+            -1, 2, 
+            (int(weight_dimension_out), int(weight_dimension_in)), 
+            device=device, 
+            dtype=dtype
+        )
         self.cached_scale = 0.412
         self.in_features = int(weight_dimension_in)
         self.out_features = int(weight_dimension_out)
