@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
 print_deadlocking_checks = False
 class PipelineParallelMatMulFreeLM:
-    def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=True, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
+    def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         if vocab_size_multiplier < 1:
             sys.exit("Vocab multiplier's smaller than 1 are unsupported")
         self.rank = int(os.environ.get("RANK", 0))

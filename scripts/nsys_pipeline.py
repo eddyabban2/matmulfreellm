@@ -18,13 +18,13 @@ parser.add_argument(
 parser.add_argument(
     "-l", 
     "--layers_multiplier",
-    default="1",
+    default="2",
     help="set the amount of times to multiply the number of layers"
 )
 parser.add_argument(
     "-w", 
     "--weight_multiplier",
-    default="1",
+    default="2",
     help="set the amount of times to multiply the number of weights in each layer"
 )
 
