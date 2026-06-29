@@ -652,7 +652,7 @@ class FusedBitLinear(BitLinear):
         weight_dimension_in *= in_multiplier
         weight_dimension_out *= out_multiplier
         device = self.weight.device 
-        # print(f"device weight: {device}")
+        dtype = self.weight.dtype
         del self.weight
         torch.cuda.empty_cache()
         gc.collect()
@@ -660,7 +660,7 @@ class FusedBitLinear(BitLinear):
             -1, 2, 
             (int(weight_dimension_out), int(weight_dimension_in)), 
             device='cpu', 
-            dtype=torch.int8
+            dtype=dtype
         )
         self.cached_scale = 0.412
         self.in_features = int(weight_dimension_in)

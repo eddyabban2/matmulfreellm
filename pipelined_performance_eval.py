@@ -319,7 +319,7 @@ def main():
     weight_multiplier=float(args.weight_multiplier)
     layers_multiplier=float(args.layers_multiplier)
     vocab_multiplier=float(args.vocab_multiplier)
-    weight_compression_settings = [True,False]
+    weight_compression_settings = [False, True]
     if args.disable_compress_weights:
         weight_compression_settings.remove(True)
     if args.disable_uncompress_weights:
