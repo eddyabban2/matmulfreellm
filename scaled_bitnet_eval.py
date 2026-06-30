@@ -144,6 +144,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_config):
         row = {'Device': device, 'Model': "Scaled Up Bitnet"}
         print(f"Collecting data for model: {model_name}")
         model = create_custom_bitnet(model_config=model_config)
+        row['Total Parameters'] = f"{model.total_params:,}"
+        row['Total Trainable Parameters'] = f"{model.trainable_params:,}"
         if args.print_model: 
             print(model)
         print("model loaded\nRunning warmup")

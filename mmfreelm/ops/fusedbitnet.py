@@ -79,7 +79,7 @@ def _layer_norm_fwd_quant_kernel(
     stride_y_row,
     stride_res_row,
     stride_res_out_row,
-    N,  # number of columns in X # might be similar  of similar to batch size
+    N,  # number of columns in X 
     eps,  # epsilon to avoid division by zero
     IS_RMS_NORM: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -148,7 +148,7 @@ def _layer_norm_fwd_quant(
         assert residual.stride(-1) == 1
         assert residual.shape == (M, N)
     if weight is not None:
-        assert weight.shape == (N,)
+        assert weight.shape == (N,), f"Assertion failed! weight.shape: {weight.shape} while N is {(N,)}"
         assert weight.stride(-1) == 1
     if bias is not None:
         assert bias.stride(-1) == 1

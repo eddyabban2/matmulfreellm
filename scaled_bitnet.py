@@ -51,6 +51,13 @@ standard_model_config = BitNetConfig(
 def create_custom_bitnet(model_config=standard_model_config):
     model = BitNetForCausalLM(model_config)
     model = model.to(torch.bfloat16)
+    total_params = sum(p.numel() for p in model.parameters())
+
+    # Calculate only trainable parameters
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    model.total_params = total_params
+    model.trainable_params = trainable_params
 
     bitnet.replace_with_bitnet_linear(
         model, 
