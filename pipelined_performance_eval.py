@@ -263,7 +263,8 @@ def create_csv_data(
     else:
         filename = f"outputs/csvs/pipelined_performance_eval-{current_time:%Y-%m-%d_%H:%M:%S}.csv"
     devices = ""
-    for i in range(torch.cuda.device_count()): 
+    world_size = int(os.environ.get("WORLD_SIZE", 2))
+    for i in range(world_size): 
         devices += (torch.cuda.get_device_name(i))
         if i < torch.cuda.device_count()-1: devices += ","
     with open(filename, 'w') as csvfile:
@@ -277,7 +278,6 @@ def create_csv_data(
                 vocab_size_multiplier=vocab_multiplier, 
                 weight_compression=weight_compression)  
             memory_usage = 0
-            world_size = int(os.environ.get("WORLD_SIZE", 2))
             for device in range(world_size):
                 print(f'Memory Allocated on Device: {device}: {(torch.cuda.memory_allocated(device=device))/(1024**3)}')
                 memory_usage += torch.cuda.memory_allocated(device=device) 
