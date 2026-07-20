@@ -1,0 +1,124 @@
+import os
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import nvtx
+import copy 
+import sys
+from datetime import timedelta
+from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+import random
+import gc 
+from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
+
+def create_scaled_mmfree(
+        layers_multiplier=1, 
+        weight_multiplier=1, 
+        vocab_size_multiplier=1, 
+        weight_compression=False, 
+        model_id="ridger/MMfreeLM-2.7B", 
+        print_model_config=False
+    ):
+    if vocab_size_multiplier < 1:
+        sys.exit("Vocab multiplier's smaller than 1 are unsupported")
+
+    device = torch.device()
+
+    config = HGRNBitConfig.from_pretrained(model_id)
+    num_layers = config.num_hidden_layers
+    
+    full_model = HGRNBitForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    )
+
+    embeddings = None
+    norm = None
+    lm_head = None
+
+    
+    if weight_multiplier != 1 or vocab_size_multiplier =@ 1: 
+        hidden_size = int(2560*weight_multiplier)
+        vocab_size = int(full_model.vocab_size*vocab_size_multiplier)
+        embeddings = nn.Embedding(
+            num_embeddings=vocab_size, 
+            embedding_dim=hidden_size, 
+            padding_idx=full_model.model.padding_idx, 
+            device=device)
+        nn.init.uniform_(embeddings.weight, a=-1, b=1)
+        embeddings.to(torch.float16)
+        full_model.model.embeddings = embeddings
+
+
+    if weight_multiplier != 1 or vocab_size_multiplier != 1:
+        full_model.model.norm.increase_size(weight_multiplier)
+        full_model.model.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
+
+    model_layers = []
+    if layers_multiplier == 1:
+        model_layers = [copy.deepcopy(full_model.model.layers[i])
+            for i in range(full_model.config.num_hidden_layers)]
+    else:
+        layer_count = int(layers_multiplier * full_model.config.num_hidden_layers)
+        for _ in range(layer_count):
+            random_layer_index = random.randint(0, full_model.config.num_hidden_layers-1)
+            model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]))
+
+    local_layers = nn.ModuleList(model_layers)
+
+    if weight_multiplier != 1:
+        for layer in local_layers:
+            layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+            layer.attn_norm.increase_size(weight_multiplier)
+            layer.mlp_norm.increase_size(weight_multiplier)
+            layer.attn.g_norm.increase_size(weight_multiplier)
+
+    full_model.model.layers = local_layers
+    torch.cuda.empty_cache()
+    full_model.config.num_hidden_layers = len(local_layers)
+    if vocab_size_multiplier != 1:
+        full_model.config.vocab_size = int(full_model.config.vocab_size * vocab_size_multiplier)
+    full_model.to(device)
+
+    if print_model_config: 
+        print(f"Embedding Layer: {full_model.model.embeddings}")
+        print(f"Local Layers: {len(full_model.model.layers)} layers")
+        print(f"norm: {full_model.model.norm}")
+        print(f"lm_head: {full_model.lm_head}")
+    return full_model
+
+def main():
+    MODEL_ID = "ridger/MMfreeLM-2.7B"
+    layers_multiplier = 0.5
+    weight_multiplier = 0.5
+    vocab_size_multiplier = 1.1
+    print_model_config = True
+    use_weight_compression = True
+    model = create_scaled_mmfree(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)
+    memory_bytes = torch.cuda.memory_allocated()
+    memory_gb = memory_bytes / (1024 ** 3)
+    print(f"GPU memory usage: {memory_gb:.2f} GB")
+    batch_size = 5
+    sequence_length = 20
+    max_new_tokens = 8
+
+    batch = generate_random_input_ids(MODEL_ID, batch_size, sequence_length)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+    _ = model.generate(
+        input_ids=input_tokens,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+    
+    print("scaled mmfree test complete")
+if __name__ == "__main__":
+    main()
