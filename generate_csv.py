@@ -33,13 +33,10 @@ parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
 )
 
-
-
 logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-# 2. Suppress HuggingFace Hub logging (where shard-loading prints originate)
 logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
@@ -351,7 +348,7 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         row = {'device': device, 'model': model_name}
         print(f"Collecting data for model: {model_name}")
         for packed in [True, False]:
-            model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+            model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
             if 'ridger' in model_name:
                 model = model.half()
                 set_ridger_compression(packed, model)

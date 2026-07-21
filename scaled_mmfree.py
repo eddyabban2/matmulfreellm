@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import copy 
 import sys
-from mmfreelm.models import HGRNBitForCausalLM
 import random
 import gc 
 from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
@@ -23,7 +22,7 @@ def create_scaled_mmfree(
         model_id,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
-    )
+    ).cuda()
     full_model.to(device)
     if weight_multiplier != 1 or vocab_size_multiplier != 1: 
         hidden_size = int(2560*weight_multiplier)

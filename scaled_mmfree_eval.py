@@ -21,7 +21,6 @@ parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
 )
 
-
 parser.add_argument(
     "-s", 
     "--sequence_length",
@@ -155,7 +154,6 @@ def create_csv_data(
             torch.cuda.empty_cache()
             memory_usage = torch.cuda.memory_allocated()
             row['Memory Usage (GiB)'] = memory_usage/(1024**3)
-            print(torch.cuda.memory_summary())
             print(f"memory usage: {memory_usage/(1024**3)}")
             row["Weight Compression"] = weight_compression
 
