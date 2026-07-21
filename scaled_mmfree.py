@@ -1,15 +1,12 @@
-import os
 import torch
-import torch.distributed as dist
 import torch.nn as nn
-import nvtx
 import copy 
 import sys
-from datetime import timedelta
-from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+from mmfreelm.models import HGRNBitForCausalLM
 import random
 import gc 
 from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
+from transformers import AutoModelForCausalLM
 
 def create_scaled_mmfree(
         layers_multiplier=1, 
@@ -22,21 +19,12 @@ def create_scaled_mmfree(
     ):
     if vocab_size_multiplier < 1:
         sys.exit("Vocab multiplier's smaller than 1 are unsupported")
-
-    config = HGRNBitConfig.from_pretrained(model_id)
-    num_layers = config.num_hidden_layers
-    
-    full_model = HGRNBitForCausalLM.from_pretrained(
+    full_model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     )
-
-    embeddings = None
-    norm = None
-    lm_head = None
-
-    
+    full_model.to(device)
     if weight_multiplier != 1 or vocab_size_multiplier != 1: 
         hidden_size = int(2560*weight_multiplier)
         vocab_size = int(full_model.vocab_size*vocab_size_multiplier)
@@ -48,16 +36,22 @@ def create_scaled_mmfree(
         nn.init.uniform_(embeddings.weight, a=-1, b=1)
         embeddings.to(torch.float16)
         full_model.model.embeddings = embeddings
+        print("weight or layer modifications")
+    else: 
+        print("no weight or layer modifications")
 
 
     if weight_multiplier != 1 or vocab_size_multiplier != 1:
         full_model.model.norm.increase_size(weight_multiplier)
         full_model.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
+    else: 
+        print("no modifications required for lm or normalization")
 
     layer_count = int(layers_multiplier * full_model.config.num_hidden_layers)
     new_hidden_size = int(2560*weight_multiplier)
     model_layers = []
     if layers_multiplier == 1:
+        print("simple deep copy of model layers")
         model_layers = [copy.deepcopy(full_model.model.layers[i])
             for i in range(full_model.config.num_hidden_layers)]
     else:
@@ -66,20 +60,22 @@ def create_scaled_mmfree(
             model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]))
 
     local_layers = nn.ModuleList(model_layers)
+    local_layers.to(device)
 
-    if weight_multiplier != 1:
-        for layer in local_layers:
-            layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-            layer.attn_norm.increase_size(weight_multiplier)
-            layer.mlp_norm.increase_size(weight_multiplier)
-            layer.attn.g_norm.increase_size(weight_multiplier)
-
-        full_model.model.lower_bounds = nn.Parameter(torch.zeros(layer_count, new_hidden_size))
+    # if weight_multiplier != 1:
+    for layer in local_layers:
+        layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+        layer.attn_norm.increase_size(weight_multiplier)
+        layer.mlp_norm.increase_size(weight_multiplier)
+        layer.attn.g_norm.increase_size(weight_multiplier)
+    full_model.model.lower_bounds = nn.Parameter(torch.zeros(layer_count, new_hidden_size))
+    # else:
+    #     print("layers do not need to have their sizes changed")
 
     full_model.model.layers = local_layers
     torch.cuda.empty_cache()
@@ -87,6 +83,11 @@ def create_scaled_mmfree(
     if vocab_size_multiplier != 1:
         full_model.config.vocab_size = int(full_model.config.vocab_size * vocab_size_multiplier)
     full_model.to(device)
+    full_model.model.embeddings.to(device)
+    full_model.model.layers.to(device)
+    full_model.model.norm.to(device)
+    full_model.lm_head.to(device)
+    full_model.model.lower_bounds.to(device)
 
     if print_model_config: 
         print(f"Embedding Layer: {full_model.model.embeddings}")
@@ -98,9 +99,9 @@ def create_scaled_mmfree(
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1.5
-    weight_multiplier = 1.5
-    vocab_size_multiplier = 1.1
+    layers_multiplier = 1
+    weight_multiplier = 1
+    vocab_size_multiplier = 1
     print_model_config = True
     use_weight_compression = False
     model = create_scaled_mmfree(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)

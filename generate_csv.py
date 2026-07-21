@@ -359,7 +359,10 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                 set_bitnet_compression(packed, model)
             row["Weight Packing"] = packed 
             run_warmup(model, model_name)
+            gc.collect()
+            torch.cuda.empty_cache()
             row["Memory Usage"] = torch.cuda.memory_allocated()/(1024**3)
+            print(torch.cuda.memory_summary())
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size

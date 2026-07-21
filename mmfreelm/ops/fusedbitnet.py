@@ -662,7 +662,7 @@ class FusedBitLinear(BitLinear):
             device='cpu', 
             dtype=dtype
         )
-        self.cached_scale = 0.412
+        self.cached_scale = torch.rand(1)[0] 
         self.in_features = int(weight_dimension_in)
         self.out_features = int(weight_dimension_out)
         self.norm.increase_size(in_multiplier, device=device)
@@ -670,7 +670,6 @@ class FusedBitLinear(BitLinear):
         if self.use_compressed_weights:
             self.compress_weights()
             self.compressed_weights = self.compressed_weights.to(device)
-            
         else:
             self.cached_weights = self.cached_weights.to(device) 
 
