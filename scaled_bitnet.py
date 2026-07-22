@@ -47,27 +47,6 @@ standard_model_config = BitNetConfig(
     quantization_config=quantization_config
 )
 
-# scaled_model_config = BitNetConfig(
-#     bos_token_id= 128000,
-#     eos_token_id= 128001,
-#     hidden_act="relu2",
-#     hidden_size=11904,           
-#     initializer_range=0.02,
-#     intermediate_size=35712,     
-#     max_position_embeddings=65536,
-#     model_type="bitnet",
-#     num_attention_heads=64,     
-#     num_hidden_layers=62,       
-#     num_key_value_heads=8,
-#     rms_norm_eps=1e-05,
-#     rope_theta=500000.0,
-#     torch_dtype="bfloat16",
-#     tie_word_embeddings=True,
-#     use_cache=True,            
-#     vocab_size=128256,
-#     quantization_config=quantization_config
-# )
-
 scaled_model_config = BitNetConfig(
     bos_token_id= 128000,
     eos_token_id= 128001,
@@ -78,7 +57,7 @@ scaled_model_config = BitNetConfig(
     max_position_embeddings=65536,
     model_type="bitnet",
     num_attention_heads=64,     
-    num_hidden_layers=30,       
+    num_hidden_layers=62,       
     num_key_value_heads=8,
     rms_norm_eps=1e-05,
     rope_theta=500000.0,
