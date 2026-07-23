@@ -53,8 +53,8 @@ gpu_roofs = [
   # {"name" : "(V100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" :           15700},
   
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
-  {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
-  # {"name" : "Jetson Nano Orin Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 17000},
+  # {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
+  {"name" : "Jetson Nano Orin Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 17000},
 ]
 
 # Memory in Giga Bytes Per Second
@@ -64,8 +64,8 @@ mem_bottlenecks = [
     # {"name" : "MCDRAM Bandwidth", "val" : 393.75},
     # {"name" : "Nvidia 6000",    "val" : 1790},
     # {"name" : "HBM2e (H100)",    "val" : 3350}, 
-    {"name" : "RTX 3090ti",    "val" : 3350}, 
-    # {"name" : "Jetson Nano Orin",    "val" : 102}, 
+    # {"name" : "RTX 3090ti",    "val" : 3350}, 
+    {"name" : "Jetson Nano Orin",    "val" : 102}, 
     # {"name" : "V100",    "val" : 1130}, 
 ]
 

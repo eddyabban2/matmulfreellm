@@ -383,6 +383,9 @@ class HGRNBitForCausalLM(HGRNBitPreTrainedModel, GenerationMixin):
             )
 
             hidden_states = outputs[0]
+            # Generation consumes only the final position; avoid retaining full prompt logits.
+            if labels is None and not self.training:
+                hidden_states = hidden_states[:, -1:, :]
             with nvtx.annotate("Compute Final Outputs", color="darkviolet"):
                 logits = self.lm_head(hidden_states)
 

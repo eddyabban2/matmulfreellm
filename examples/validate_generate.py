@@ -2,6 +2,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import sys
 import time
+from pathlib import Path
 import torch
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -14,11 +15,12 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
     batch_size = 1
     sequence_length = 1
-    example_input_token = torch.load('example_input_tensor.pt')
+    data_dir = Path(__file__).parent / "data"
+    example_input_token = torch.load(data_dir / "example_input_tensor.pt")
     print(f"Input Tokens: {tokenizer.batch_decode(example_input_token, skip_special_tokens=True)[0]}")
 
     current_output_token = model.generate(example_input_token.cuda(), max_new_tokens=sequence_length, do_sample=False)
-    expected_output_token = torch.load('example_output_tensor.pt')
+    expected_output_token = torch.load(data_dir / "example_output_tensor.pt")
 
     if torch.equal(current_output_token, expected_output_token):
         print("Output Tensor Matches expected input tensor")

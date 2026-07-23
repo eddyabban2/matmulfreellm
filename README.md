@@ -31,6 +31,17 @@ The following requirements should be satisfied
 pip install -U git+https://github.com/ridgerchu/matmulfreellm
 ```
 
+# Repository layout
+
+- `mmfreelm/`: installable model library.
+- `examples/`: small generation and validation entry points. Run these as modules, for example `python -m examples.generate`.
+- `benchmarks/`: generation, pipeline, and TensorRT benchmarks.
+- `analysis/`: profiling, plotting, and weight-analysis utilities.
+- `experiments/integration/`: long-running GPU and Hugging Face integration runners.
+- `scripts/`: NVIDIA profiling helpers.
+
+The integration runners download models and require a CUDA-capable environment; they are intentionally separate from fast local validation.
+
 # Usage
 ## Pre-trained Model Zoo
 | Model Size     | Layer | Hidden dimension  | Trained tokens |

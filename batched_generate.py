@@ -5,7 +5,7 @@ import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from bench_utils import generate_random_input_ids
+from utils import generate_random_input_ids
 import transformers
 import argparse
 import statistics
@@ -335,7 +335,7 @@ def create_csv_data(model, sequence_length, iters):
 
 
 def main():
-    name = 'ridger/MMfreeLM-2.7B'
+    name = 'ridger/MMfreeLM-370M'
     tokenizer = AutoTokenizer.from_pretrained(name)
     model = AutoModelForCausalLM.from_pretrained(name).cuda().half()
     if args.fixed_point:
