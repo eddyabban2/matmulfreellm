@@ -1,0 +1,5 @@
+device,model,batch size,tokens_per_second,Avg Prefill Time (s)
+U250,ridger/MMfreeLM-2.7B,1,80,1.2
+U250,ridger/MMfreeLM-2.7B,24,1943,1.2
+,,,,
+,,,,
