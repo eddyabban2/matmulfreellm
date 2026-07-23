@@ -112,6 +112,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
             max_new_tokens=max_new_tokens,
             do_sample=True,
             top_p=0.4,
@@ -203,6 +204,7 @@ def first_token_time(model, batch_size, seq_len, num_iterations, model_name='rid
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=1,
             max_new_tokens=1,
             do_sample=True,
             top_p=0.4,
