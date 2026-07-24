@@ -1,7 +1,5 @@
 # Example run: 
-# python quiet_run.py -b 5 -s 10 -n 10 -i 1 
-# Example Bitnet Run: 
-# python quiet_run.py -b 5 -s 10 -n 10 -i 1 --model_name microsoft/bitnet-b1.58-2B-4T --prefill_decode
+# python scaled_mmfree_quiet_run.py -b 5 -s 10 -n 10 -i 1 --
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -15,7 +13,6 @@ import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from scaled_mmfree import create_scaled_mmfree
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -113,28 +110,19 @@ else:
     import mmfreelm
 batch = None
 
-MODEL_ID = None
-if model_name == "scaled_mmfree":
-    MODEL_ID = "ridger/MMfreeLM-2.7B"
-else: 
-    MODEL_ID = model_name
-
 if args.use_dataset_prompts:
-    batch = generate_dataset_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
 else: 
-    batch = generate_random_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
 
 model = None
-print("attempting to load model")
 if "ridger" in model_name:
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-elif "scaled_mmfree" in model_name: 
-    model = create_scaled_mmfree(layers_multiplier=2.5, weight_multiplier=3.9375, vocab_size_multiplier=4, weight_compression=True)
 else: 
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-print("loaded model")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name).cuda()
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate

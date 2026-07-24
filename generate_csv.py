@@ -352,7 +352,7 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         csvwriter = None  
         row = {'device': device, 'model': model_name}
         print(f"Collecting data for model: {model_name}")
-        compressionType = [CompressedType.INT8, CompressedType.FLOAT16, CompressedType.NAIVE]
+        compressionType = [CompressedType.INT8, CompressedType.FLOAT16, CompressedType.NAIVE, CompressedType.FP4]
         for packed in compressionType:
             model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
             if 'ridger' in model_name:
@@ -365,7 +365,6 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
             gc.collect()
             torch.cuda.empty_cache()
             row["Memory Usage"] = torch.cuda.memory_allocated()/(1024**3)
-            print(torch.cuda.memory_summary())
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size

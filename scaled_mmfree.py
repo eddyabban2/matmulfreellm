@@ -35,16 +35,11 @@ def create_scaled_mmfree(
         nn.init.uniform_(embeddings.weight, a=-1, b=1)
         embeddings.to(torch.float16)
         full_model.model.embeddings = embeddings
-        print("weight or layer modifications")
-    else: 
-        print("no weight or layer modifications")
 
 
     if weight_multiplier != 1 or vocab_size_multiplier != 1:
         full_model.model.norm.increase_size(weight_multiplier)
         full_model.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
-    else: 
-        print("no modifications required for lm or normalization")
 
     layer_count = int(layers_multiplier * full_model.config.num_hidden_layers)
     new_hidden_size = int(2560*weight_multiplier)
@@ -98,9 +93,12 @@ def create_scaled_mmfree(
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
-    weight_multiplier = 1
-    vocab_size_multiplier = 1
+    # layers_multiplier = 1
+    # weight_multiplier = 1
+    # vocab_size_multiplier = 1
+    layers_multiplier = 2.5
+    weight_multiplier = 3.9375
+    vocab_size_multiplier = 4
     print_model_config = True
     use_weight_compression = False
     model = create_scaled_mmfree(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)

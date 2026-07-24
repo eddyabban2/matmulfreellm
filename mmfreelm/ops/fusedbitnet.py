@@ -679,8 +679,9 @@ class FusedBitLinear(BitLinear):
     def convert_weights(self):
         match self.compressed_type:
             case CompressedType.NAIVE:
+                device = self.cached_weights.device
                 self.compress_weights()
-                self.compressed_weights = self.compressed_weights.to(self.cached_weights.device)
+                self.compressed_weights = self.compressed_weights.to(device)
             case CompressedType.FLOAT16:
                 self.cached_weights = self.cached_weights.to(torch.float16)
             case CompressedType.INT8:
@@ -719,7 +720,7 @@ class FusedBitLinear(BitLinear):
                 self.bias,
                 is_rms_norm=True, 
                 scale=self.cached_scale, 
-                compress_weights=self.use_compressed_weights
+                compress_weights=(self.compressed_type == CompressedType.NAIVE)
             )
 
 VALUES_PER_ITEM = 4

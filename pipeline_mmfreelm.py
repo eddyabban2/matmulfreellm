@@ -13,6 +13,7 @@ from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import random
 import gc 
 from utils import generate_dataset_input_ids, create_string_from_tokens
+from mmfreelm.ops.fusedbitnet import CompressedType
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -57,6 +58,8 @@ class PipelineParallelMatMulFreeLM:
         self.embeddings = None
         self.norm = None
         self.lm_head = None
+
+        weight_compression = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
         
         if self.rank == 0:
             if weight_multiplier == 1 and vocab_size_multiplier == 1: 
@@ -76,7 +79,7 @@ class PipelineParallelMatMulFreeLM:
             self.lm_head = full_model.lm_head.to(self.device)
             if weight_multiplier != 1 or vocab_size_multiplier != 1:
                 self.norm.increase_size(weight_multiplier)
-                self.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compress_weights=weight_compression)
+                self.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compressed_type=weight_compression)
         model_layers = []
         if layers_multiplier == 1:
             model_layers = [copy.deepcopy(full_model.model.layers[i])
@@ -91,12 +94,12 @@ class PipelineParallelMatMulFreeLM:
 
         if weight_multiplier != 1:
             for layer in self.local_layers:
-                layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-                layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-                layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-                layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-                layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
-                layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compress_weights=weight_compression)
+                layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
+                layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
+                layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
+                layer.attn.o_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
+                layer.mlp.gate_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
+                layer.mlp.down_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
                 layer.attn_norm.increase_size(weight_multiplier)
                 layer.mlp_norm.increase_size(weight_multiplier)
                 layer.attn.g_norm.increase_size(weight_multiplier)
@@ -310,8 +313,8 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 2
-    weight_multiplier = 2
+    layers_multiplier = 0.5
+    weight_multiplier = 0.5
     vocab_size_multiplier = 4
     print_model_config = True
     use_weight_compression = False
