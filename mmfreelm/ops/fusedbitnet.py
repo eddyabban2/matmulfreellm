@@ -11,6 +11,7 @@ import nvtx
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
+from enum import Enum
 import gc
 
 
