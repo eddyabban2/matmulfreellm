@@ -18,10 +18,12 @@ import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
-from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import transformers.integrations.bitnet as bitnet
+
 import bitnet as local_bitnet
 import mmfreelm
+from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+from mmfreelm.ops.fusedbitnet import CompressedType
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -327,6 +329,7 @@ def set_ridger_compression(compression, model):
     for layer in model.model.layers: 
         layer.set_compression(compression)
 def set_bitnet_compression(compression, model):
+    compression = (compression == CompressedType.NAIVE) 
     for layer in model.model.layers:
         layer.self_attn.q_proj.compress_weights = compression
         layer.self_attn.k_proj.compress_weights = compression
@@ -349,7 +352,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         csvwriter = None  
         row = {'device': device, 'model': model_name}
         print(f"Collecting data for model: {model_name}")
-        for packed in [True, False]:
+        compressionType = [CompressedType.INT8, CompressedType.FLOAT16, CompressedType.NAIVE]
+        for packed in compressionType:
             model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
             if 'ridger' in model_name:
                 model = model.half()

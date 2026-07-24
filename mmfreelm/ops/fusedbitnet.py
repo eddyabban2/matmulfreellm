@@ -618,6 +618,12 @@ class BitLinear(nn.Linear):
 
             return y
 
+class CompressedType(Enum):
+    NAIVE = 1
+    FP4 = 2
+    INT8 = 3
+    FLOAT16 = 4
+
 class FusedBitLinear(BitLinear):
     """
     A custom linear layer that applies quantization on both activations and weights.
@@ -638,7 +644,7 @@ class FusedBitLinear(BitLinear):
         self.cached_weights = None
         self.cached_scale = None
         self.compressed_weights = None
-        self.use_compressed_weights = True
+        self.compressed_type = CompressedType.NAIVE
         self.test_compression = False 
     def _apply(self, fn):
         super()._apply(fn)
@@ -648,7 +654,7 @@ class FusedBitLinear(BitLinear):
             self.cached_weights = fn(self.cached_weights)
         return self
 
-    def increase_size(self, in_multiplier, out_multiplier, compress_weights=True):
+    def increase_size(self, in_multiplier, out_multiplier, compressed_type=CompressedType.NAIVE):
         weight_dimension_out, weight_dimension_in = self.weight.shape
         weight_dimension_in *= in_multiplier
         weight_dimension_out *= out_multiplier
@@ -667,13 +673,23 @@ class FusedBitLinear(BitLinear):
         self.in_features = int(weight_dimension_in)
         self.out_features = int(weight_dimension_out)
         self.norm.increase_size(in_multiplier, device=device)
-        self.use_compressed_weights = compress_weights
-        if self.use_compressed_weights:
-            self.compress_weights()
-            self.compressed_weights = self.compressed_weights.to(device)
-        else:
-            self.cached_weights = self.cached_weights.to(device) 
+        self.compressed_type = compressed_type
+        self.convert_weights()
 
+    def convert_weights(self):
+        match self.compressed_type:
+            case CompressedType.NAIVE:
+                self.compress_weights()
+                self.compressed_weights = self.compressed_weights.to(self.cached_weights.device)
+            case CompressedType.FLOAT16:
+                self.cached_weights = self.cached_weights.to(torch.float16)
+            case CompressedType.INT8:
+                self.cached_weights = self.cached_weights.to(torch.int8)
+            case CompressedType.FP4:
+                self.cached_weights = self.cached_weights.to(torch.float4_e2m1fn_x2)
+            case _:
+                print("Unknown compression type exiting")
+                exit()
     def compress_weights(self):
         self.compressed_weights = pack_weights(self.cached_weights)
         if self.test_compression: 
@@ -690,13 +706,11 @@ class FusedBitLinear(BitLinear):
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear", color="red"):
             if(self.compressed_weights == None and self.cached_weights == None):
-                # print("weights are not cached cacheing")
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
                 del self.weight
-                if self.use_compressed_weights: 
-                    self.compress_weights()
-            active_weights = self.compressed_weights if self.use_compressed_weights else self.cached_weights
+                self.convert_weights()
+            active_weights = self.compressed_weights if self.compressed_type == CompressedType.NAIVE else self.cached_weights
             return layer_norm_linear_quant_fn(
                 x,
                 self.norm.weight,
@@ -709,8 +723,6 @@ class FusedBitLinear(BitLinear):
             )
 
 VALUES_PER_ITEM = 4
-
-
 def pack_weights(quantized_weights: torch.Tensor) -> torch.Tensor:
     """
     Packs a tensor of quantized weights into a compact format using 2 bits per value.
