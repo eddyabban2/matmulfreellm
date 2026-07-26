@@ -674,20 +674,21 @@ class FusedBitLinear(BitLinear):
         self.out_features = int(weight_dimension_out)
         self.norm.increase_size(in_multiplier, device=device)
         self.compressed_type = compressed_type
-        self.convert_weights()
+        self.convert_weights(device=device)
 
-    def convert_weights(self):
+    def convert_weights(self, device=None):
         match self.compressed_type:
             case CompressedType.NAIVE:
-                device = self.cached_weights.device
+                if device == None:
+                    device = self.cached_weights.device
                 self.compress_weights()
                 self.compressed_weights = self.compressed_weights.to(device)
             case CompressedType.FLOAT16:
-                self.cached_weights = self.cached_weights.to(torch.float16)
+                self.cached_weights = self.cached_weights.to(torch.float16).to(device)
             case CompressedType.INT8:
-                self.cached_weights = self.cached_weights.to(torch.int8)
+                self.cached_weights = self.cached_weights.to(torch.int8).to(device)
             case CompressedType.FP4:
-                self.cached_weights = self.cached_weights.to(torch.float4_e2m1fn_x2)
+                self.cached_weights = self.cached_weights.to(torch.float4_e2m1fn_x2).to(device)
             case _:
                 print("Unknown compression type exiting")
                 exit()

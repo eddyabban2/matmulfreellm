@@ -2,8 +2,7 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    python scaled_mmfree_eval.py -s 32 --max_new_tokens 32 -i 5 --min_batch_power 0 --max_batch_power 2 \
-        --weight_multiplier 1 --layers_multiplier 1 --vocab_multiplier 1
+    python scaled_mmfree_eval.py -s 32 --max_new_tokens 32 -i 5 --min_batch_power 0 --max_batch_power 2 --weight_multiplier 1 --layers_multiplier 1 --vocab_multiplier 1
 """
 
 import os
