@@ -10,8 +10,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 import gc
-from torch.profiler import profile, record_function, ProfilerActivity
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
+from torch.profiler import profile, ProfilerActivity
+from transformers import AutoModelForCausalLM, logging
 from utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
@@ -288,6 +288,7 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
+        min_new_tokens=1,
         max_new_tokens=max_new_tokens,
         do_sample=True,
         top_p=0.4,
@@ -300,19 +301,20 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     start_time = time.time()
     monitor.begin_window(window_key, sync_execution=True)
     for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
+        model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            top_p=0.4,
+            temperature=0.6
+        )
     mes = monitor.end_window(window_key, sync_execution=True)
     end_time = time.time()
     timeline = power_monitor.get_power_timeline(
-        power_domain="device_instant",  # or "device_average" or "memory_average"
-        gpu_index=0,  # specify GPU, or None for all GPUs
+        power_domain="device_instant",
+        gpu_index=0,
         start_time=start_time,
         end_time=end_time
     )
@@ -352,7 +354,7 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         csvwriter = None  
         row = {'device': device, 'model': model_name}
         print(f"Collecting data for model: {model_name}")
-        compressionType = [CompressedType.INT8, CompressedType.FLOAT16, CompressedType.NAIVE, CompressedType.FP4]
+        compressionType = [CompressedType.FLOAT16, CompressedType.NAIVE]
         for packed in compressionType:
             model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
             if 'ridger' in model_name:
@@ -379,6 +381,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                 detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                 end_time = time.time()
                 print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+                if args.collect_power_data:
+                    get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()
@@ -466,6 +470,13 @@ if __name__ == "__main__":
         "--model", 
         default="ridger/MMfreeLM-2.7B",
         help="selects model",
+    )
+
+    parser.add_argument(
+        "--collect_power_data",
+        action='store_true',
+        default=False,
+        help="changes whether we collect power data"
     )
 
     args = parser.parse_args()
