@@ -15,7 +15,7 @@ import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from scaled_mmfree import create_scaled_mmfree
+from scaled_mmfree import print_system_ram
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -130,8 +130,6 @@ model = None
 print("attempting to load model")
 if "ridger" in model_name:
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-elif "scaled_mmfree" in model_name: 
-    model = create_scaled_mmfree(layers_multiplier=2.5, weight_multiplier=3.9375, vocab_size_multiplier=4, weight_compression=True)
 else: 
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
 print("loaded model")
@@ -145,6 +143,7 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
+print_system_ram("After Models Loaded")
 gc.collect()
 torch.cuda.empty_cache()
 print("warmup finished")

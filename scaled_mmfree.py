@@ -61,7 +61,7 @@ def create_scaled_mmfree(
 
     local_layers = nn.ModuleList(model_layers)
     local_layers = local_layers.to(device)
-    full_model.model.lower_bounds = nn.Parameter(torch.zeros(layer_count, new_hidden_size).to(device))
+    full_model.model.lower_bounds = nn.Parameter(torch.rand(layer_count, new_hidden_size).to(device))
 
     # if weight_multiplier != 1:
     for layer in local_layers:
