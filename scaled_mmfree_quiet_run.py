@@ -102,7 +102,7 @@ weight_compression=True
 model_id="ridger/MMfreeLM-2.7B"
 print_model_config=False
 device="cuda"
-
+print("attempting to load model")
 model = create_scaled_mmfree(
     layers_multiplier=layers_multiplier,
     weight_multiplier=weight_compression, 
@@ -111,13 +111,14 @@ model = create_scaled_mmfree(
     model_id=model_id, 
     print_model_config=print_model_config, 
     device=device)
+print("finished loading model")
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
+        max_new_tokens=1,
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
