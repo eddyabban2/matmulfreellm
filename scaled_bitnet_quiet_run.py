@@ -6,7 +6,7 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
-from transformers import AutoModelForCausalLM, logging
+from transformers import AutoModelForCausalLM, logging, AutoConfig
 import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
@@ -17,6 +17,7 @@ import gc
 
 from utils import generate_random_input_ids, generate_dataset_input_ids
 from scaled_bitnet import scaled_model_config, standard_model_config, create_custom_bitnet
+from scaled_mmfree import print_system_ram 
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -103,47 +104,69 @@ else:
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
+print("loading model")
+# 2. Initialize the model architecture directly from the config (uninitialized weights)
+model = AutoModelForCausalLM.from_config(scaled_model_config)
+print("initalized a temp model")
 
-model = torch.load('scaled_bitnet.pth', weights_only=False)
+bitnet.replace_with_bitnet_linear(
+    model, 
+    quantization_config=scaled_model_config.quantization_config
+)
+print("quantizing model")
+
+# 3. Load your custom state dictionary from the local file
+state_dict = torch.load('scaled_bitnet.pth', weights_only=False)
+print("loaded state dictionary")
+
+# 4. Apply the loaded weights to the model
+model.load_state_dict(state_dict)
+print("dictionary loaded into model")
+
+# 5. Send the entire model to the GPU
+model = model.to("cuda")
+print_system_ram("Memory After Loading Model")
+
+print(model)
 print("model loaded")
     
-# print("warmup running")
-# with nvtx.annotate("warmup", color="white"):
-#     _ = model.generate(
-#         input_ids=input_ids,
-#         attention_mask=attention_mask,
-#         max_new_tokens=max_new_tokens,
-#         do_sample=True,
-#         top_p=0.4,
-#         temperature=0.6)
-# gc.collect()
-# torch.cuda.empty_cache()
-# print("warmup finished")
-# #generate call
-# with nvtx.annotate("workload", color="cyan"):
-#     if prefill_decode:
-#         with nvtx.annotate("prefill", color="red"):
-#             with torch.no_grad():
-#                 out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
-#         with nvtx.annotate("switching between pre and deco", color="green"):
-#             past = out.past_key_values
-#             next_tok = out.logits[:, -1:, :].argmax(-1)
-#             print("switching now")
-#         with nvtx.annotate("decode", color="blue"):
-#             with torch.no_grad():
-#                 for i in range(max_new_tokens-1):
-#                     with nvtx.annotate(f"decodingStep{i}", color="cyan"):
-#                         out = model(input_ids=next_tok, past_key_values=past,
-#                                     use_cache=True, return_dict=True)
-#                         past = out.past_key_values
-#                         next_tok = out.logits[:, -1:, :].argmax(-1)
-#     else: 
-#         for _ in range(num_iterations):
-#             model.generate(
-#                     input_ids=input_ids,
-#                     attention_mask=attention_mask,
-#                     min_new_tokens=max_new_tokens,
-#                     max_new_tokens=max_new_tokens,
-#                     do_sample=False
-#                 )
-# print("inference worked")
+print("warmup running")
+with nvtx.annotate("warmup", color="white"):
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+gc.collect()
+torch.cuda.empty_cache()
+print("warmup finished")
+print_system_ram("Memory After Warmup")
+#generate call
+with nvtx.annotate("workload", color="cyan"):
+    if prefill_decode:
+        with nvtx.annotate("prefill", color="red"):
+            with torch.no_grad():
+                out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+        with nvtx.annotate("switching between pre and deco", color="green"):
+            past = out.past_key_values
+            next_tok = out.logits[:, -1:, :].argmax(-1)
+        with nvtx.annotate("decode", color="blue"):
+            with torch.no_grad():
+                for i in range(max_new_tokens-1):
+                    with nvtx.annotate(f"decodingStep{i}", color="cyan"):
+                        out = model(input_ids=next_tok, past_key_values=past,
+                                    use_cache=True, return_dict=True)
+                        past = out.past_key_values
+                        next_tok = out.logits[:, -1:, :].argmax(-1)
+    else: 
+        for _ in range(num_iterations):
+            model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    min_new_tokens=max_new_tokens,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False
+                )
+print("inference worked")
