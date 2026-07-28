@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 from mmfreelm.modules.layernorm import rms_norm_ref
 from mmfreelm.ops.fusedbitnet import unpack_weights, weight_quant
+from mmfreelm.ops.ternary_matmul import ternary_matmul
 
 try:
     import tensorrt as trt
@@ -52,7 +53,7 @@ def _activation_quant_int8(x: torch.Tensor) -> torch.Tensor:
 
 
 class _DequantInt8Weight(torch.autograd.Function):
-    """ONNX DequantizeLinear(scale=1, zp=0) for ternary INT8 weights; TRT-compatible."""
+    """Fallback ONNX DequantizeLinear for runtimes without TernaryMatMul."""
 
     @staticmethod
     def forward(ctx, weight_int8: torch.Tensor):
@@ -158,10 +159,14 @@ class PureTorchFusedBitLinear(nn.Module):
 
     Weights are stored as ``int8`` in {-1, 0, 1} and cast to the activation dtype
     at runtime so ONNX/TRT materialize compact INT8 initializers instead of FP16.
+
+    When ``use_ternary_op`` is True (default), exports ``mmfreelm::TernaryMatMul`` for
+    TensorRT plugin fusion. Set False for ONNX Runtime (DequantizeLinear + Gemm).
     """
 
-    def __init__(self, src: nn.Module):
+    def __init__(self, src: nn.Module, use_ternary_op: bool = True):
         super().__init__()
+        self.use_ternary_op = use_ternary_op
         self.bias = getattr(src, "bias", None)
         src_weight = src.weight
         norm = (
@@ -215,8 +220,14 @@ class PureTorchFusedBitLinear(nn.Module):
             )
         else:
             x = _activation_quant_int8(x)
-        w = _dequant_int8_weight(self.weight_int8, x.dtype)
-        return F.linear(x, w, self.bias) * self._output_scale.to(dtype=x.dtype)
+        orig = x.shape
+        x2 = x.reshape(-1, x.shape[-1])
+        if self.use_ternary_op:
+            y = ternary_matmul(x2, self.weight_int8, self._output_scale, self.bias)
+        else:
+            w = _dequant_int8_weight(self.weight_int8, x2.dtype)
+            y = F.linear(x2, w * self._output_scale.to(x2.dtype), self.bias)
+        return y.reshape(*orig[:-1], y.shape[-1])
 
 
 def _module_source_file(module: nn.Module) -> str:
@@ -224,7 +235,7 @@ def _module_source_file(module: nn.Module) -> str:
     return getattr(mod, "__file__", "") or ""
 
 
-def patch_all_triton_ops(model: nn.Module) -> nn.Module:
+def patch_all_triton_ops(model: nn.Module, *, use_ternary_op: bool = True) -> nn.Module:
     norm_replaced = 0
     linear_replaced = 0
     swish_replaced = 0
@@ -274,7 +285,7 @@ def patch_all_triton_ops(model: nn.Module) -> nn.Module:
             parent = getattr(parent, p)
         child_name = parts[-1]
         if kind == "fused_linear":
-            new_mod = PureTorchFusedBitLinear(src_module)
+            new_mod = PureTorchFusedBitLinear(src_module, use_ternary_op=use_ternary_op)
             new_mod = new_mod.to(
                 next(src_module.parameters()).device,
                 next(src_module.parameters()).dtype,
@@ -510,8 +521,23 @@ class ONNXTRTAccelerator:
             hgrn_bit_mod.swiglu = orig_hb_swiglu
             modeling_mod.swiglu = orig_model_swiglu
         print("[TRT] ONNX export done ✓")
+        from mmfreelm.onnx_export import patch_ternary_matmul_domain
+        from mmfreelm.ops.ternary_matmul import ONNX_DOMAIN
+
+        n = patch_ternary_matmul_domain(self.onnx_path)
+        if n:
+            print(f"[TRT] Patched {n} TernaryMatMul nodes to domain '{ONNX_DOMAIN}'")
 
     def _build_engine(self) -> bytes:
+        try:
+            from mmfreelm.trt_plugins import register_ternary_matmul_plugin
+
+            register_ternary_matmul_plugin()
+            print("[TRT] Registered mmfreelm::TernaryMatMul Python plugin")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to register mmfreelm::TernaryMatMul plugin: {exc}"
+            ) from exc
         builder = trt.Builder(self.logger)
         # TensorRT 10+ always uses explicit batch and removed this legacy enum.
         explicit_batch = getattr(

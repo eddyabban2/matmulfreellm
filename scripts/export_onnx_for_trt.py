@@ -83,8 +83,11 @@ def export_onnx(model_name: str, out_path: str, fp32: bool = False) -> None:
         hgrn_bit_mod.swiglu = orig_hb_swiglu
         modeling_mod.swiglu = orig_model_swiglu
 
+    from mmfreelm.onnx_export import patch_ternary_matmul_domain
+
+    n = patch_ternary_matmul_domain(out_path)
     size_gb = os.path.getsize(out_path) / (1024**3)
-    print(f"[export] Done ({size_gb:.2f} GiB)")
+    print(f"[export] Done ({size_gb:.2f} GiB, {n} TernaryMatMul nodes)")
 
 
 def main():

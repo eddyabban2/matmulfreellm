@@ -62,12 +62,13 @@ def test_onnx_runtime_matches_patched_pytorch(tmp_path):
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
     patched = patch_all_triton_ops(
-        AutoModelForCausalLM.from_pretrained(MODEL).cuda().half().eval()
+        AutoModelForCausalLM.from_pretrained(MODEL).cuda().half().eval(),
+        use_ternary_op=False,
     )
     pt_fwd = ModelForwardWrapper(patched)
 
     onnx_path = str(tmp_path / "model.onnx")
-    _export_onnx_for_test(pt_fwd, onnx_path)
+    _export_onnx_for_test(pt_fwd, onnx_path, patch_ternary_domain=False)
 
     sess = onnxruntime.InferenceSession(
         onnx_path, providers=["CPUExecutionProvider"]
@@ -89,7 +90,12 @@ def test_onnx_runtime_matches_patched_pytorch(tmp_path):
             assert max_diff < 2.0, f"seq={seq_len} max_diff={max_diff}"
 
 
-def _export_onnx_for_test(fwd: ModelForwardWrapper, onnx_path: str) -> None:
+def _export_onnx_for_test(
+    fwd: ModelForwardWrapper,
+    onnx_path: str,
+    *,
+    patch_ternary_domain: bool = True,
+) -> None:
     import mmfreelm.layers.hgrn_bit as hgrn_bit_mod
     import mmfreelm.models.hgrn_bit.modeling_hgrn_bit as modeling_mod
     import mmfreelm.ops.hgrn.recurrent_fuse as recurrent_fuse_mod
@@ -128,3 +134,8 @@ def _export_onnx_for_test(fwd: ModelForwardWrapper, onnx_path: str) -> None:
         hgrn_bit_mod.fused_recurrent_hgrn = orig_hb
         hgrn_bit_mod.swiglu = orig_hb_swiglu
         modeling_mod.swiglu = orig_model_swiglu
+
+    if patch_ternary_domain:
+        from mmfreelm.onnx_export import patch_ternary_matmul_domain
+
+        patch_ternary_matmul_domain(onnx_path)
