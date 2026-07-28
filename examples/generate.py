@@ -198,6 +198,11 @@ def parse_args():
         help="Delete cached ONNX/engine and rebuild (TensorRT only).",
     )
     p.add_argument(
+        "--trt-fp32",
+        action="store_true",
+        help="Use FP32 ONNX/TensorRT weights for numerical stability.",
+    )
+    p.add_argument(
         "--model",
         type=str,
         default=DEFAULT_MODEL,
@@ -239,14 +244,18 @@ def main():
         from generate_integrated import replace_with_fixed_point_hgrn
 
         tokenizer = AutoTokenizer.from_pretrained(name)
-        model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda().half()
+        model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda()
+        if not args.trt_fp32:
+            model = model.half()
         model = replace_with_fixed_point_hgrn(model)
         print("✓ HGRN layers replaced with fixed-point implementation using ternary_matmul")
         implementation_type = "Fixed-Point HGRN"
     else:
         print("Using standard floating-point implementation...")
         tokenizer = AutoTokenizer.from_pretrained(name)
-        model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda().half()
+        model = AutoModelForCausalLM.from_pretrained(name, **load_kw).cuda()
+        if not args.trt_fp32:
+            model = model.half()
         implementation_type = "Floating-Point"
 
     if not use_cache:
@@ -268,11 +277,12 @@ def main():
             model,
             max_batch=1,
             max_seq=max_seq,
-            model_name=name,
-            use_fp16=True,
+            model_name=name + ("-fp32" if args.trt_fp32 else ""),
+            use_fp16=not args.trt_fp32,
             rebuild=args.rebuild_trt_engine,
         )
-        implementation_type = f"{implementation_type} + TensorRT"
+        precision = "FP32" if args.trt_fp32 else "FP16"
+        implementation_type = f"{implementation_type} + TensorRT {precision}"
 
     results = benchmark_generation(
         model,

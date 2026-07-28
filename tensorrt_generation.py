@@ -1,6 +1,7 @@
 # Shared TensorRT / CUDA-graph path for MMfreeLM (ONNX export + JetPack TRT).
 # Used by generate.py and benchmark_trt.py.
 
+import gc
 import hashlib
 import os
 import sys
@@ -10,7 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mmfreelm.ops.fusedbitnet import weight_quant
+from mmfreelm.modules.layernorm import rms_norm_ref
+from mmfreelm.ops.fusedbitnet import unpack_weights, weight_quant
 
 try:
     import tensorrt as trt
@@ -41,6 +43,55 @@ def default_trt_cache_paths(model_name: str) -> Tuple[str, str]:
 # ── Pure-PyTorch replacements for Triton-backed ops ──────────────────────────
 
 
+def _activation_quant_int8(x: torch.Tensor) -> torch.Tensor:
+    """Per-row int8 quant/dequant (no packing) matching ``_layer_norm_fwd_quant``."""
+    xf = x.float()
+    scale = 127.0 / xf.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
+    q = torch.floor(xf * scale + 0.5).clamp(-128, 127).to(torch.int8)
+    return (q.float() / scale).to(x.dtype)
+
+
+class _DequantInt8Weight(torch.autograd.Function):
+    """ONNX DequantizeLinear(scale=1, zp=0) for ternary INT8 weights; TRT-compatible."""
+
+    @staticmethod
+    def forward(ctx, weight_int8: torch.Tensor):
+        return weight_int8.float()
+
+    @staticmethod
+    def symbolic(g, weight_int8):
+        scale = g.op(
+            "Constant",
+            value_t=torch.tensor([1.0], dtype=torch.float32),
+        )
+        zero_point = g.op(
+            "Constant",
+            value_t=torch.tensor([0], dtype=torch.int8),
+        )
+        return g.op("DequantizeLinear", weight_int8, scale, zero_point)
+
+
+def _dequant_int8_weight(weight_int8: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    w = _DequantInt8Weight.apply(weight_int8)
+    return w.to(dtype)
+
+
+def _layer_norm_fwd_quant_ref(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    eps: float,
+) -> torch.Tensor:
+    """RMSNorm + activation quant matching ``layer_norm_linear_quant_fn``."""
+    xf = x.float()
+    y = xf * torch.rsqrt(xf.pow(2).mean(dim=-1, keepdim=True) + eps)
+    if weight is not None:
+        y = y * weight.float()
+    if bias is not None:
+        y = y + bias.float()
+    return _activation_quant_int8(y)
+
+
 class PureTorchRMSNorm(nn.Module):
     """Replaces flash-attn / mmfreelm Triton RMSNorm."""
 
@@ -51,15 +102,17 @@ class PureTorchRMSNorm(nn.Module):
         self.eps = getattr(src, "eps", 1e-6)
 
     def forward(self, x, residual=None, prenorm=False, residual_in_fp32=False):
-        if residual is not None:
-            x = x + residual.to(x.dtype)
-        orig = x.dtype
-        x = x.float()
-        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        x = x.to(orig) * self.weight
-        if self.bias is not None:
-            x = x + self.bias
-        return (x, residual) if prenorm else x
+        if residual is not None and residual_in_fp32:
+            residual = residual.float()
+        return rms_norm_ref(
+            x,
+            self.weight,
+            self.bias,
+            residual=residual,
+            eps=self.eps,
+            prenorm=prenorm,
+            upcast=residual_in_fp32,
+        )
 
 
 class PureTorchFusedRMSNormSwishGate(nn.Module):
@@ -94,13 +147,23 @@ def ternary_quantize(w: torch.Tensor) -> torch.Tensor:
     return weight_quant(w)
 
 
+def activation_quantize(x: torch.Tensor) -> torch.Tensor:
+    """Match the original per-token int8 activation quantize/dequantize step."""
+    scale = 127.0 / x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5)
+    return (x * scale).round().clamp(-128, 127) / scale
+
+
 class PureTorchFusedBitLinear(nn.Module):
-    """RMSNorm(x) → ternary_quantize(weight) → F.linear"""
+    """Inference-only RMSNorm + linear with INT8 ternary weights (no 2-bit packing).
+
+    Weights are stored as ``int8`` in {-1, 0, 1} and cast to the activation dtype
+    at runtime so ONNX/TRT materialize compact INT8 initializers instead of FP16.
+    """
 
     def __init__(self, src: nn.Module):
         super().__init__()
-        self.weight = src.weight
         self.bias = getattr(src, "bias", None)
+        src_weight = src.weight
         norm = (
             getattr(src, "norm", None)
             or getattr(src, "layer_norm", None)
@@ -118,24 +181,42 @@ class PureTorchFusedBitLinear(nn.Module):
             self.norm_eps = getattr(src, "eps", 1e-6)
         self.has_norm = self.norm_weight is not None
         with torch.no_grad():
-            wq = ternary_quantize(self.weight.detach().float()).to(
-                dtype=self.weight.dtype, device=self.weight.device
+            cached_w = getattr(src, "cached_weights", None)
+            compressed = getattr(src, "compressed_weights", None)
+            cached_scale = getattr(src, "cached_scale", None)
+
+            if compressed is not None:
+                quant_w = unpack_weights(compressed, src_weight.dtype)
+            elif cached_w is not None:
+                quant_w = cached_w
+            else:
+                orig_w = src_weight.float()
+                if cached_scale is None:
+                    cached_scale = 1.0 / orig_w.abs().mean().clamp_(min=1e-5)
+                quant_w = weight_quant(orig_w)
+
+            if cached_scale is None:
+                cached_scale = 1.0 / src_weight.float().abs().mean().clamp_(min=1e-5)
+
+            weight_int8 = quant_w.round().clamp(-1, 1).to(torch.int8)
+            device = src_weight.device
+            self.register_buffer("weight_int8", weight_int8, persistent=True)
+            # FusedBitLinear divides the matmul by cached_scale (= 1/mean(|W|)).
+            self.register_buffer(
+                "_output_scale",
+                cached_scale.reciprocal().to(dtype=torch.float32, device=device),
+                persistent=True,
             )
-        self.register_buffer("_weight_quant_eval", wq, persistent=False)
 
     def forward(self, x):
         if self.has_norm:
-            orig = x.dtype
-            xf = x.float()
-            xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.norm_eps)
-            x = xf.to(orig) * self.norm_weight
-            if self.norm_bias is not None:
-                x = x + self.norm_bias
-        if self.training:
-            w_q = ternary_quantize(self.weight.float()).to(x.dtype)
+            x = _layer_norm_fwd_quant_ref(
+                x, self.norm_weight, self.norm_bias, self.norm_eps
+            )
         else:
-            w_q = self._weight_quant_eval.to(dtype=x.dtype)
-        return F.linear(x, w_q, self.bias)
+            x = _activation_quant_int8(x)
+        w = _dequant_int8_weight(self.weight_int8, x.dtype)
+        return F.linear(x, w, self.bias) * self._output_scale.to(dtype=x.dtype)
 
 
 def _module_source_file(module: nn.Module) -> str:
@@ -214,7 +295,7 @@ def patch_all_triton_ops(model: nn.Module) -> nn.Module:
     print(
         f"[PATCH] Replaced {norm_replaced} Triton norms, "
         f"{swish_replaced} RMSNorm+SwishGate, "
-        f"{linear_replaced} fused BitLinear → PyTorch (eval: cached ternary weights)."
+        f"{linear_replaced} fused BitLinear → PyTorch (INT8 ternary weights, no packing)."
     )
     return model
 
@@ -338,7 +419,9 @@ class ONNXTRTAccelerator:
         self.onnx_path = onnx_path
 
         model = patch_all_triton_ops(model)
+        model.eval()
         self.fwd = ModelForwardWrapper(model)
+        self.parameter_count = sum(p.numel() for p in self.fwd.model.parameters())
         self.max_batch = max_batch
         self.max_seq = max_seq
         self.use_fp16 = use_fp16
@@ -356,7 +439,17 @@ class ONNXTRTAccelerator:
         print("[TRT] Engine ready ✓")
 
     def parameters(self):
-        return self.fwd.model.parameters()
+        # Kept for the benchmark's model-like interface; the PyTorch model is
+        # deliberately released before TensorRT engine construction.
+        return iter(())
+
+    def _release_export_model(self):
+        if self.fwd is not None:
+            del self.fwd
+            self.fwd = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            print("[TRT] Released PyTorch export model before engine build.")
 
     def _load_or_build(self):
         if os.path.exists(self.engine_path):
@@ -366,6 +459,7 @@ class ONNXTRTAccelerator:
         print("[TRT] Building engine …")
         if not os.path.exists(self.onnx_path):
             self._export_onnx()
+        self._release_export_model()
         data = self._build_engine()
         with open(self.engine_path, "wb") as f:
             f.write(data)
@@ -377,15 +471,23 @@ class ONNXTRTAccelerator:
         # otherwise hits Triton autotune (not traceable). Swap to naive PyTorch
         # only for export, then restore.
         import mmfreelm.layers.hgrn_bit as hgrn_bit_mod
+        import mmfreelm.models.hgrn_bit.modeling_hgrn_bit as modeling_mod
         import mmfreelm.ops.hgrn.recurrent_fuse as recurrent_fuse_mod
-        from mmfreelm.ops.hgrn.naive import naive_recurrent_hgrn
+        from mmfreelm.ops.hgrn.naive import onnx_recurrent_hgrn
 
         orig_rf = recurrent_fuse_mod.fused_recurrent_hgrn
         orig_hb = hgrn_bit_mod.fused_recurrent_hgrn
-        recurrent_fuse_mod.fused_recurrent_hgrn = naive_recurrent_hgrn
-        hgrn_bit_mod.fused_recurrent_hgrn = naive_recurrent_hgrn
+        orig_hb_swiglu = hgrn_bit_mod.swiglu
+        orig_model_swiglu = modeling_mod.swiglu
+        def export_swiglu(x, y):
+            return (x * torch.sigmoid(x)) * y
+        recurrent_fuse_mod.fused_recurrent_hgrn = onnx_recurrent_hgrn
+        hgrn_bit_mod.fused_recurrent_hgrn = onnx_recurrent_hgrn
+        hgrn_bit_mod.swiglu = export_swiglu
+        modeling_mod.swiglu = export_swiglu
         print(f"[TRT] Exporting ONNX → {self.onnx_path}")
-        dummy = torch.zeros((1, 8), dtype=torch.long, device="cuda")
+        # Trace at seq=1 so constant-folding does not bake in a fixed prompt length.
+        dummy = torch.zeros((1, 1), dtype=torch.long, device="cuda")
         try:
             with torch.no_grad():
                 torch.onnx.export(
@@ -399,18 +501,24 @@ class ONNXTRTAccelerator:
                         "input_ids": {0: "batch", 1: "seq"},
                         "logits": {0: "batch"},
                     },
-                    do_constant_folding=True,
+                    do_constant_folding=False,
+                    dynamo=False,
                 )
         finally:
             recurrent_fuse_mod.fused_recurrent_hgrn = orig_rf
             hgrn_bit_mod.fused_recurrent_hgrn = orig_hb
+            hgrn_bit_mod.swiglu = orig_hb_swiglu
+            modeling_mod.swiglu = orig_model_swiglu
         print("[TRT] ONNX export done ✓")
 
     def _build_engine(self) -> bytes:
         builder = trt.Builder(self.logger)
-        net = builder.create_network(
-            1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        # TensorRT 10+ always uses explicit batch and removed this legacy enum.
+        explicit_batch = getattr(
+            trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None
         )
+        network_flags = 0 if explicit_batch is None else 1 << int(explicit_batch)
+        net = builder.create_network(network_flags)
         parser = trt.OnnxParser(net, self.logger)
         with open(self.onnx_path, "rb") as f:
             if not parser.parse(f.read()):
@@ -418,10 +526,14 @@ class ONNXTRTAccelerator:
                     "\n".join(str(parser.get_error(i)) for i in range(parser.num_errors))
                 )
         cfg = builder.create_builder_config()
-        cfg.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 2 << 30)
-        if self.use_fp16 and builder.platform_has_fast_fp16:
-            cfg.set_flag(trt.BuilderFlag.FP16)
-            print("[TRT] FP16 enabled.")
+        # Jetson uses unified system memory. A 256 MiB builder workspace leaves
+        # room for TensorRT tactic compilation on the 8 GiB Orin, at the cost
+        # of a slower engine build.
+        cfg.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 256 << 20)
+        # TensorRT 11 removed the legacy FP16 builder flag. It preserves the
+        # FP16 precision encoded in the ONNX weights and casts automatically.
+        if self.use_fp16:
+            print("[TRT] FP16 ONNX weights; using TensorRT 11 default precision.")
         prof = builder.create_optimization_profile()
         prof.set_shape(
             "input_ids",
@@ -436,15 +548,25 @@ class ONNXTRTAccelerator:
         return bytes(data)
 
     def _alloc_buffers(self):
-        vocab = self.engine.get_binding_shape(
-            self.engine.get_binding_index("logits")
-        )[-1]
+        self._trt11_io = hasattr(self.engine, "num_io_tensors")
+        if self._trt11_io:
+            self._input_name = "input_ids"
+            self._output_name = "logits"
+            vocab = self.engine.get_tensor_shape(self._output_name)[-1]
+            self._in_dtype = np.dtype(trt.nptype(self.engine.get_tensor_dtype(self._input_name)))
+            self._out_dtype = np.dtype(trt.nptype(self.engine.get_tensor_dtype(self._output_name)))
+        else:
+            vocab = self.engine.get_binding_shape(
+                self.engine.get_binding_index("logits")
+            )[-1]
+            self._in_dtype = np.int64
+            self._out_dtype = np.float16
         self._vocab = vocab
         self._in_buf = cuda.pagelocked_empty(
-            (self.max_batch * self.max_seq,), dtype=np.int32
+            (self.max_batch * self.max_seq,), dtype=self._in_dtype
         )
         self._out_buf = cuda.pagelocked_empty(
-            (self.max_batch * vocab,), dtype=np.float16
+            (self.max_batch * vocab,), dtype=self._out_dtype
         )
         self._d_in = cuda.mem_alloc(self._in_buf.nbytes)
         self._d_out = cuda.mem_alloc(self._out_buf.nbytes)
@@ -452,17 +574,27 @@ class ONNXTRTAccelerator:
 
     def _step(self, ids: torch.Tensor) -> torch.Tensor:
         b, s = ids.shape
-        self._in_buf[: b * s] = ids.cpu().numpy().astype(np.int32).ravel()
-        self.context.set_binding_shape(0, (b, s))
+        self._in_buf[: b * s] = ids.cpu().numpy().astype(self._in_dtype).ravel()
+        if self._trt11_io:
+            if not self.context.set_input_shape(self._input_name, (b, s)):
+                raise RuntimeError(f"TensorRT rejected input shape {(b, s)}")
+            self.context.set_tensor_address(self._input_name, int(self._d_in))
+            self.context.set_tensor_address(self._output_name, int(self._d_out))
+        else:
+            self.context.set_binding_shape(0, (b, s))
         cuda.memcpy_htod_async(self._d_in, self._in_buf[: b * s], self._stream)
-        self.context.execute_async_v2(
-            [int(self._d_in), int(self._d_out)], self._stream.handle
-        )
+        if self._trt11_io:
+            if not self.context.execute_async_v3(self._stream.handle):
+                raise RuntimeError("TensorRT execution failed")
+        else:
+            self.context.execute_async_v2(
+                [int(self._d_in), int(self._d_out)], self._stream.handle
+            )
         n = b * self._vocab
         cuda.memcpy_dtoh_async(self._out_buf[:n], self._d_out, self._stream)
         self._stream.synchronize()
         return torch.from_numpy(self._out_buf[:n].copy()).view(b, self._vocab).to(
-            dtype=torch.float16, device="cuda"
+            device="cuda"
         )
 
     def generate(

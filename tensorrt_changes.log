@@ -45,3 +45,27 @@ Default ridger/MMfreeLM-2.7B: NvMapMemAlloc / allocator error when moving full m
 - GPU_MEMORY_NOTES.txt: ongoing VRAM/utilization checklist; generate.py gains --low-cpu-mem and
   --no-cache (use_cache=False) for marginal footprint / long-run savings.
 
+2026-07-28 (ONNX dynamic sequence fix)
+--------------------------------------
+- Root cause: naive_recurrent_hgrn uses `for i in range(T)`; torch.onnx.export unrolls that loop
+  at the trace length (dummy seq=8), producing Gather nodes with constant indices. Runtime fails
+  for any other seq (Gather out of bounds) and TRT outputs garbage.
+- Fix: onnx_recurrent_hgrn in mmfreelm/ops/hgrn/naive.py — closed-form scan using
+  exp(cumsum(log(g))) and cumsum (ONNX opset 17 has CumSum, not CumProd).
+- tensorrt_generation._export_onnx uses onnx_recurrent_hgrn; traces at seq=1 dummy input.
+- tests/test_onnx_export.py validates recurrent parity and ORT vs patched-PyTorch argmax.
+- scripts/export_onnx_for_trt.py exports ONNX only for remote trtexec build.
+- Remaining: patch_all_triton_ops (PureTorchFusedBitLinear) still diverges from Triton FusedBitLinear
+  vs raw HF (~9 logits L2); FP16 TRT may drift on greedy decode after ~7 tokens vs patched PT.
+  Use --trt-fp32 or CUDA Graphs for HF-matching inference until BitLinear export path is fixed.
+
+2026-07-28 (export patch accuracy)
+--------------------------------
+- PureTorchRMSNorm: use rms_norm_ref() and return merged residual on prenorm=True (was returning
+  the unmerged residual tensor, breaking mlp_norm residual path — ~9 logits max diff vs HF).
+- PureTorchFusedBitLinear: mirror layer_norm_linear_quant_fn via _layer_norm_fwd_quant_ref
+  (floor-based int8 activation quant) and reuse FusedBitLinear cached_weights/cached_scale when set.
+- Patched PyTorch now matches raw HF argmax on tested prompts; greedy 16-token decode full match.
+- ONNX ORT (CPU) argmax matches raw HF on tested prompts (max logit diff ~0.7).
+- tests/test_onnx_export.py: test_patched_pytorch_matches_raw_hf regression test.
+

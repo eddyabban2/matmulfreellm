@@ -69,6 +69,8 @@ class BaselineModel:
 
 
 def n_params(model):
+    if hasattr(model, "parameter_count"):
+        return model.parameter_count
     raw = model
     for attr in ("fwd", "model"):
         raw = getattr(raw, attr, raw)
@@ -155,6 +157,7 @@ def parse_args():
         "--mode", choices=["cudagraphs", "onnx_trt", "baseline"], default="cudagraphs"
     )
     p.add_argument("--fixed-point", action="store_true")
+    p.add_argument("--fp32", action="store_true", help="Export/build TensorRT in FP32")
     p.add_argument("--batches", type=int, default=1)
     p.add_argument("--max-length", type=int, default=32)
     p.add_argument("--iterations", type=int, default=5)
@@ -166,7 +169,9 @@ def main():
     args = parse_args()
     print(f"[INFO] Loading {MODEL_NAME} …")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME).cuda().half()
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME).cuda()
+    if not args.fp32:
+        model = model.half()
     model.eval()
 
     if args.fixed_point:
@@ -194,11 +199,11 @@ def main():
                 model,
                 max_batch=args.batches,
                 max_seq=args.max_length + 64,
-                model_name=MODEL_NAME,
-                use_fp16=True,
+                model_name=MODEL_NAME + ("-fp32" if args.fp32 else ""),
+                use_fp16=not args.fp32,
                 rebuild=args.rebuild_engine,
             )
-            label = "TensorRT FP16 (JetPack)"
+            label = "TensorRT FP32 (JetPack)" if args.fp32 else "TensorRT FP16 (JetPack)"
     else:
         print("[INFO] Mode: Baseline FP16")
         accel = BaselineModel(model, tokenizer)
@@ -214,11 +219,12 @@ def main():
     )
     print_results(res, accel, label)
 
-    print(f"{'='*80}\nSAMPLE GENERATION (5 batches)\n{'='*80}")
+    sample_batch = min(5, args.batches)
+    print(f"{'='*80}\nSAMPLE GENERATION ({sample_batch} batches)\n{'='*80}")
     ids = tokenizer(PROMPTS[1], return_tensors="pt").input_ids.cuda()
     with torch.no_grad():
         outs = accel.generate(
-            ids.repeat(5, 1),
+            ids.repeat(sample_batch, 1),
             max_length=45,
             do_sample=True,
             top_p=0.4,
