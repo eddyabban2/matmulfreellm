@@ -264,7 +264,9 @@ def runtime_fraction(profiling_df):
         'activation quantization runtime(ns)',
         'ternary matmul runtime(ns)',
         'post quantization processing runtime(ns)',
-        'unpack weights runtime(ns)'
+        'unpack weights runtime(ns)',
+        'LayerNormLinearQuantFn is rms norm runtime(ns)', 
+        'applying scale runtime(ns)'
     ]
 
     # 6. Calculate 'Other runtime' so the total equals exactly 100% of workload runtime
@@ -338,7 +340,7 @@ def runtime_fraction(profiling_df):
     plt.legend(title='Workload Sections', bbox_to_anchor=(1.02, 1), loc='upper left')
 
     # 11. Save the figure to a file
-    plt.savefig('grouped_workload_breakdown.png', dpi=300, bbox_inches='tight')
+    plt.savefig('paper_graphs/grouped_workload_breakdown.png', dpi=300, bbox_inches='tight')
 
     # Clear the plot from memory
     plt.close()

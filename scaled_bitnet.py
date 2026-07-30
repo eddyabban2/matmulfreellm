@@ -111,7 +111,7 @@ def print_bitlinear_shapes(model: torch.nn.Module):
     print("=== End of BitLinear dimensions ===\n")
 
 def main():
-    model_config = scaled_model_config
+    model_config = standard_model_config
     model = create_custom_bitnet(model_config=model_config)
     prompts = [
         "Explain the concept of quantum computing.",

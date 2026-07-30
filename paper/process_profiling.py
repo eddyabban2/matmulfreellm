@@ -29,21 +29,24 @@ with open(filename, 'w') as csvfile:
         values['model'] = "Scaled Up Bitnet" if values['model'] == 'scaled_bitnet' else values['model']
         row = {'model': values['model'], 'batch size': values['batch'], "Sequence Length": values["input_len"], "Output Length": values["output_len"]}
 
-        relevant_labels = ['workload', 'decode', 'prefill', 'ternary matmul', 'unpack weights', 'BitLinear Forward', 'activation quantization', 'post quantization processing']
+        relevant_labels = ['workload', 'decode', 'prefill', 'ternary matmul', 'unpack weights', 'BitLinear Forward', 'activation quantization', 'post quantization processing', 'Fused Bit Linear', "LayerNormLinearQuantFn is rms norm", "applying scale"]
+        for label in relevant_labels: 
+            row[label + " runtime(ns)"] = 0
+            row[label + " intstances"] = 0
         with open("paper_profiling/" + file, "r") as fp:
             for line in fp:
                 if "PushPop" in line: 
-                    list_line = line.split()
-                    runtime = int(list_line[1].replace(",", ""))
-                    intstances = int(list_line[2].replace(",", ""))
                     label = line.split(":")[1].strip()
-                    print(line)
-                    print(f'\tlabel: [{label}]')
-                    print(f"\truntime: {runtime}")
-                    print(f"\tinstances: {intstances}")
                     if label in relevant_labels: 
+                        list_line = line.split()
+                        runtime = int(list_line[1].replace(",", ""))
+                        intstances = int(list_line[2].replace(",", ""))
                         row[label + " runtime(ns)"] = runtime
                         row[label + " intstances"] = intstances
+                        print(line)
+                        print(f'\tlabel: [{label}]')
+                        print(f"\truntime: {runtime}")
+                        print(f"\tinstances: {intstances}")
         if(first_row):
             csvwriter = csv.DictWriter(csvfile, row.keys())
             csvwriter.writeheader()
