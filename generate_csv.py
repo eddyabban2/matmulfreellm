@@ -349,7 +349,7 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now())
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         row = {'device': device, 'model': model_name}

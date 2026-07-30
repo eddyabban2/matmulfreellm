@@ -19,6 +19,8 @@ BS_COL = "batch size"
 PACKING_COL = "Weight Packing"
 DEVICE_COL = "device"
 TTFT_COL = "Avg Prefill Time (s)"
+SEQ_LEN = "Sequence Length"
+OUT_LEN = "Output Length"
 
 RIDGER_MODEL_ID = "ridger/MMfreeLM-2.7B"
 BITNET_MODEL_ID = "microsoft/bitnet-b1.58-2B-4T"
