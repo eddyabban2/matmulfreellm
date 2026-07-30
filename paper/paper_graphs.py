@@ -9,11 +9,13 @@ from matplotlib.lines import Line2D   # only needed for a custom legend (optiona
 GPU_MATMUL_FILE = "paper_csv/mmfree.csv"
 GPU_BITNET_FILE = "paper_csv/bitnet.csv"
 FPGA_FILE = "paper_csv/fpga.csv"
+PROFILING_FILE = "paper_profiling/summary.csv"
 
 GPU_SCALED_MATMUL_FILE = "paper_csv/scaled_mmfree.csv"
 GPU_SCALED_BITNET_FILE = "paper_csv/scaled_bitnet.csv"
 
 TPS_COL = "tokens_per_second"
+AVG_RUNTIME = "run_time_seconds"
 MODEL_COL = "model"
 BS_COL = "batch size"
 PACKING_COL = "Weight Packing"
@@ -36,17 +38,18 @@ U250_DEVICE_ID = "U250"
 def get_col_from_df(df, hardware, model, val_col, packing=None): 
     df = df[(df[MODEL_COL] == model) & (df[DEVICE_COL] == hardware)]
     if packing is not None: 
+        df[PACKING_COL] = df[PACKING_COL].map({'CompressedType.FLOAT16': False, 'CompressedType.NAIVE': True})
         df = df[df[PACKING_COL] == packing]
     return df[val_col]
 
 def get_value_from_df(df, hardware, model, find_max, max_col, val_col, packing=None): 
     df = df[(df[MODEL_COL] == model) & (df[DEVICE_COL] == hardware)]
     if packing is not None: 
+        df[PACKING_COL] = df[PACKING_COL].map({'CompressedType.FLOAT16': False, 'CompressedType.NAIVE': True, True: True, False: False})
         df = df[df[PACKING_COL] == packing]
     return df.loc[df[max_col].idxmax()][val_col] if find_max else df.loc[df[max_col].idxmin()][val_col]
     
 def performance_barchart(matmul_gpu_df, bitnet_gpu_df, fpga_df):
-
     best_v100_matmul_packing_tps = get_value_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, True, TPS_COL, TPS_COL, packing=True)
     best_v100_matmul_packing_bs = get_value_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, True, TPS_COL, BS_COL, packing=True)
 
@@ -221,13 +224,13 @@ def scaled_performance_bar_chart(scaled_matmul_gpu_df, scaled_bitnet_gpu_df):
     print(f'✅ Scaled Performance Graphs saved to {out_path}')
 
 def latency_requirements(matmul_gpu_df, fpga_df): 
-    v100_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TTFT_COL, packing=True)
+    v100_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=True)
     v100_packing_tps = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL, packing=True)
 
-    v100_no_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TTFT_COL, packing=False)
+    v100_no_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=False)
     v100_no_packing_tps = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL, packing=False)
 
-    u250_ttft = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, TTFT_COL)
+    u250_ttft = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME)
     u250_tps = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL)
 
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -236,14 +239,110 @@ def latency_requirements(matmul_gpu_df, fpga_df):
     ax.plot(u250_tps, u250_ttft, label = "U250")
 
     ax.set_xlabel('Tokens per Second')
-    ax.set_ylabel('Avg Prefill Time (s)')
-    ax.set_title('Throughput Vs Latency: TPS vs TTFT')
+    ax.set_ylabel('End to End Latency (s)')
+    ax.set_title('Throughput Vs Latency: TPS vs End to End Latency')
     ax.legend()
     ax.grid(True, linestyle='--', alpha=0.6)
     out_path="paper_graphs/latency_graph.png"
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     print(f'✅ Latency graph saved to {out_path}')
 
+
+def runtime_fraction(profiling_df):
+
+    # 2. Fill missing kernel times with 0
+    profiling_df = profiling_df.fillna(0)
+
+    # 3. Sort by model first, then batch size, so they are grouped together on the chart
+    profiling_df = profiling_df.sort_values(by=['model', 'batch size'])
+
+    # 4. Create a clean, grouped label for the X-axis
+    profiling_df['Config'] = profiling_df['model'] + '\n(BS: ' + profiling_df['batch size'].astype(str) + ')'
+
+    # 5. Define the non-overlapping sections of the workload
+    sections = [
+        'activation quantization runtime(ns)',
+        'ternary matmul runtime(ns)',
+        'post quantization processing runtime(ns)',
+        'unpack weights runtime(ns)'
+    ]
+
+    # 6. Calculate 'Other runtime' so the total equals exactly 100% of workload runtime
+    profiling_df['Other runtime(ns)'] = profiling_df['workload runtime(ns)'] - profiling_df[sections].sum(axis=1)
+    plot_columns = sections + ['Other runtime(ns)']
+
+    # 7. Convert absolute runtimes to percentages (fraction out of 100)
+    df_percentages = profiling_df[plot_columns].div(profiling_df['workload runtime(ns)'].values, axis=0) * 100
+
+    x_positions = []
+    x_ticks = []
+    x_tick_labels = []
+    current_x = 0
+
+    # Group by model to determine spacing
+    for model, group in profiling_df.groupby('model', sort=False):
+        group_size = len(group)
+        
+        # Place bars side-by-side for the current model
+        group_positions = [current_x + i for i in range(group_size)]
+        x_positions.extend(group_positions)
+        
+        # Center the model label under this group of bars
+        x_ticks.append(sum(group_positions) / group_size)
+        x_tick_labels.append(model)
+        
+        # Move the starting position for the next group (adding a gap of 1 unit)
+        current_x += group_size + 1
+
+    # 8. Plot the stacked bars manually to apply the custom spacing
+    fig, ax = plt.subplots(figsize=(14, 8))
+    colors = plt.cm.Set2.colors
+    bottom = np.zeros(len(profiling_df))
+
+    for i, col in enumerate(plot_columns):
+        color = colors[i % len(colors)]
+        ax.bar(
+            x_positions, 
+            df_percentages[col], 
+            bottom=bottom, 
+            label=col, 
+            color=color, 
+            edgecolor='black',
+            width=0.8
+        )
+        bottom += df_percentages[col]
+
+    # 9. Add Batch Size labels at the top of each bar
+    for x, bs in zip(x_positions, profiling_df['batch size']):
+        ax.text(
+            x=x, 
+            y=101, 
+            s=f'BS:{bs}', 
+            ha='center', 
+            va='bottom', 
+            fontsize=10, 
+            fontweight='bold'
+        )
+
+    # 10. Formatting
+    ax.set_xticks(x_ticks)
+    # Slight rotation ensures long model names don't overlap
+    ax.set_xticklabels(x_tick_labels, rotation=15, ha='right', fontsize=11)
+
+    plt.title('Workload Breakdown by Model (100% Stacked)', fontsize=16, pad=15)
+    plt.ylabel('Percentage of Total Workload (%)', fontsize=12)
+    plt.xlabel('Model', fontsize=12)
+    plt.ylim(0, 110)
+
+    # Move legend outside the plot
+    plt.legend(title='Workload Sections', bbox_to_anchor=(1.02, 1), loc='upper left')
+
+    # 11. Save the figure to a file
+    plt.savefig('grouped_workload_breakdown.png', dpi=300, bbox_inches='tight')
+
+    # Clear the plot from memory
+    plt.close()
+    
 def main(): 
     matmul_gpu_df = pd.read_csv(GPU_MATMUL_FILE)
     bitnet_gpu_df = pd.read_csv(GPU_BITNET_FILE)
@@ -252,9 +351,11 @@ def main():
     scaled_matmul_gpu_df = pd.read_csv(GPU_SCALED_MATMUL_FILE)
     scaled_bitnet_gpu_df = pd.read_csv(GPU_SCALED_BITNET_FILE)
 
+    profiling_df = pd.read_csv(PROFILING_FILE)
 
     performance_barchart(matmul_gpu_df, bitnet_gpu_df,fpga_df)
     latency_requirements(matmul_gpu_df, fpga_df)
     scaled_performance_bar_chart(scaled_matmul_gpu_df, scaled_bitnet_gpu_df)
+    runtime_fraction(profiling_df)
 if __name__ == "__main__":
     main()
