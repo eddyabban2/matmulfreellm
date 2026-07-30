@@ -12,7 +12,7 @@ parser.add_argument(
     "-p", 
     "--profile",
     default="full",
-    help="sets the sequence length of input tokens"
+    help="sets the profiling setting"
 )
 
 parser.add_argument(
@@ -20,6 +20,13 @@ parser.add_argument(
     action='store_true',
     default=False,
     help="sets whether we mark prefill and decode sections of the workload"
+)
+
+parser.add_argument(
+    "-b", 
+    "--batch",
+    default=1,
+    help="sets the batch size"
 )
 
 args = parser.parse_args()
@@ -34,7 +41,7 @@ def create_report_name(bs, new_tokens, seq_len, model_name='scaled_bitnet'):
     model_name = model_name.replace("/", "-")
     return  os.getcwd() + "/outputs/nsys_runs/nsys_profiler" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "prefillAndDecode" + str(prefill_decode)
 
-batch_size = 64
+batch_size = int(args.batch)
 seq_len = 1000
 new_tokens = 1000
 

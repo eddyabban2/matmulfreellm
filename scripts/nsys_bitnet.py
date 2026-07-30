@@ -22,6 +22,13 @@ parser.add_argument(
     help="sets whether we mark prefill and decode sections of the workload"
 )
 
+parser.add_argument(
+    "-b", 
+    "--batch",
+    default=1,
+    help="sets the batch size"
+)
+
 args = parser.parse_args()
 metric_profile = args.profile
 prefill_decode = args.prefill_decode
@@ -34,9 +41,9 @@ def create_report_name(bs, new_tokens, seq_len, model_name='bitnet'):
     model_name = model_name.replace("/", "-")
     return  os.getcwd() + "/outputs/nsys_runs/nsys_profiler" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "prefillAndDecode" + str(prefill_decode)
 
-batch_size = 1
+batch_size = int(args.batch)
 seq_len = 1000 
-new_tokens = 5
+new_tokens = 1000
 
 report_name = create_report_name(batch_size, new_tokens, seq_len)
 print(report_name)
