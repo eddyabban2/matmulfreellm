@@ -7,7 +7,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
 from transformers import AutoModelForCausalLM, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
+from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
 import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
@@ -134,6 +134,7 @@ else:
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
 print("loaded model")
 print("warmup running")
+add_nvtx_hooks_to_every_module(model)
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
     _ = model.generate(

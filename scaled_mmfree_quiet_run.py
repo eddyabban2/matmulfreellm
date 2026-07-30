@@ -5,7 +5,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
 from transformers import AutoModelForCausalLM, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
+from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
 import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
@@ -112,6 +112,7 @@ model = create_scaled_mmfree(
     print_model_config=print_model_config, 
     device=device)
 print("finished loading model")
+add_nvtx_hooks_to_every_module(model)
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate

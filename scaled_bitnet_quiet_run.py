@@ -15,7 +15,7 @@ import random
 import numpy as np
 import gc 
 
-from utils import generate_random_input_ids, generate_dataset_input_ids
+from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
 from scaled_bitnet import scaled_model_config, standard_model_config, create_custom_bitnet
 from scaled_mmfree import print_system_ram 
 
@@ -126,6 +126,8 @@ print("dictionary loaded into model")
 # 5. Send the entire model to the GPU
 model = model.to("cuda")
 print_system_ram("Memory After Loading Model")
+
+add_nvtx_hooks_to_every_module(model)
 
 print(model)
 print("model loaded")

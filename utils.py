@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import pynvml
 import torch
+import nvtx
 
 def generate_random_input_ids(model_name, batch_size, sequence_length):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -107,6 +108,23 @@ class CustomThread(Thread):
     def join(self):
         super().join()
         return self._return
+
+def add_nvtx_hooks_to_every_module(model: torch.nn.Module, print_debug=False):
+    def pre_hook(module, input):
+        # Push range when the attention module starts its forward pass
+        nvtx.push_range(message=module.__class__.__name__, color="green")
+
+    def post_hook(module, input, output):
+        # Pop range when the attention module finishes
+        nvtx.pop_range()
+
+    hooked_count = 0
+    for name, module in model.named_modules():
+        if print_debug:
+            print(f"module name: {module.__class__.__name__}")
+        module.register_forward_pre_hook(pre_hook)
+        module.register_forward_hook(post_hook)
+        hooked_count += 1
 
 def main():
     generate_dataset_input_ids("ridger/MMfreeLM-2.7B", 5, 200)
