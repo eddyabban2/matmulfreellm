@@ -10,8 +10,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 import torch.distributed as dist
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-import transformers
+from transformers import logging
 import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
@@ -135,12 +134,12 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
     world_size = int(os.environ.get("WORLD_SIZE", 2))
     if collect_power_data:
         results['joules_per_token'] = []
-        results['average_power_watts'] = []
-        results['max_power_watts'] = []
-        results['min_power_watts'] = [] 
         results['total_energy_joules'] = []
         for gpu_idx in range(world_size):
-            results[f'gpu {gpu_idx} total_energy'] = []
+            results[f'gpu_{gpu_idx}_total_energy'] = []
+            results[f'gpu_{gpu_idx}_avg_power'] = []
+            results[f'gpu_{gpu_idx}_max_power'] = []
+            results[f'gpu_{gpu_idx}_min_power'] = []
     micro_batches = []
     generate_input_ids = generate_dataset_input_ids if use_dataset_prompts else generate_random_input_ids
     if rank == 0: 
@@ -180,30 +179,35 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         tps = (tokens_generated) / generation_time
         if collect_power_data: 
             timeline = power_monitor.get_power_timeline(
-                power_domain="device_instant",  # or "device_average" or "memory_average"
+                power_domain="device_instant",
                 start_time=start_time,
                 end_time=end_time)
             for gpu_idx, data in timeline.items():
                 powers = [power_watts for timestamp, power_watts in data]
                 if len(powers) != 0:
-                    results['average_power_watts'].append(sum(powers) / len(powers))
-                results['max_power_watts'].append(max(powers))
-                results['min_power_watts'].append(min(powers))
+                    results[f'gpu_{gpu_idx}_avg_power'].append(sum(powers) / len(powers))
+                    results[f'gpu_{gpu_idx}_max_power'].append(max(powers))
+                    results[f'gpu_{gpu_idx}_min_power'].append(min(powers))
+                else: 
+                    results[f'gpu_{gpu_idx}_avg_power'].append(0)
+                    results[f'gpu_{gpu_idx}_max_power'].append(0)
+                    results[f'gpu_{gpu_idx}_min_power'].append(0)
             for gpu_idx in mes.gpu_energy: 
-                results[f'gpu {gpu_idx} total_energy'].append(mes.gpu_energy[gpu_idx])
-
-            results[f'total_energy_joules'].append(sum((mes.gpu_energy.values())))
-            results[f'joules_per_token'].append(sum((mes.gpu_energy.values())) / tokens_generated)
+                results[f'gpu_{gpu_idx}_total_energy'].append(mes.gpu_energy[gpu_idx])
+            total_energy = sum(mes.gpu_energy.values())
+            results['total_energy_joules'].append(total_energy)
+            results['joules_per_token'].append(total_energy / tokens_generated)
         results['generation_time'].append(generation_time)
         results['tps'].append(tps)
     if collect_power_data:
-        row['average_power_watts'] = statistics.mean(results['average_power_watts'])
-        row['max_power_watts'] = statistics.mean(results['max_power_watts'])
-        row['min_power_watts'] = statistics.mean(results['min_power_watts'])
         row['total_energy_joules'] = statistics.mean(results['total_energy_joules'])
         row['joules_per_token'] = statistics.mean(results['joules_per_token'])
+        
         for gpu_idx in range(world_size):
-            row[f'total energy from GPU: {gpu_idx}'] = statistics.mean(results[f'gpu {gpu_idx} total_energy'])
+            row[f'gpu_{gpu_idx}_avg_power_watts'] = statistics.mean(results[f'gpu_{gpu_idx}_avg_power']) if results[f'gpu_{gpu_idx}_avg_power'] else 0
+            row[f'gpu_{gpu_idx}_max_power_watts'] = statistics.mean(results[f'gpu_{gpu_idx}_max_power']) if results[f'gpu_{gpu_idx}_max_power'] else 0
+            row[f'gpu_{gpu_idx}_min_power_watts'] = statistics.mean(results[f'gpu_{gpu_idx}_min_power']) if results[f'gpu_{gpu_idx}_min_power'] else 0
+            row[f'gpu_{gpu_idx}_total_energy_joules'] = statistics.mean(results[f'gpu_{gpu_idx}_total_energy']) if results[f'gpu_{gpu_idx}_total_energy'] else 0
 
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
@@ -291,8 +295,10 @@ def create_csv_data(
                 row['Batch Size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
                 print(f"\t\tRunning Benchmarks...")
-                benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=collect_power_data)
-                time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
+                if collect_power_data:
+                    benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=True)
+                benchmark_generation(pipelined_model, batch_size, sequence_length, iters, max_new_tokens, row, count_micro_batches, rank, collect_power_data=False)
+                # time_to_first_token(pipelined_model, batch_size, sequence_length, iters, row, count_micro_batches, rank)
                 if rank == 0:
                     if(first_row):
                         csvwriter = csv.DictWriter(csvfile, row.keys())
