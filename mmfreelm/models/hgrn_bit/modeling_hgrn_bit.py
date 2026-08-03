@@ -56,10 +56,12 @@ class HGRNBitMLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
-        with nvtx.annotate("HGRNBitMLP", color="blue"):
+        with nvtx.annotate("HGRNBitMLP Forward", color="blue"):
             y = self.gate_proj(x)
             gate, y = y.chunk(2, -1)
-            z = self.down_proj(swiglu(gate, y))
+            with nvtx.annotate("swiglu", color="orange"):
+                temp = swiglu(gate, y)
+            z = self.down_proj(temp)
             return z
 
 

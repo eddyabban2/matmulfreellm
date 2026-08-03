@@ -457,17 +457,18 @@ class LayerNormLinearQuantFn(torch.autograd.Function):
                 if residual is not None
                 else (torch.float32 if residual_in_fp32 else None)
             )
-            y, mean, rstd, residual_out = _layer_norm_fwd_quant(
-                x,
-                norm_weight,
-                norm_bias,
-                eps,
-                residual,
-                out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
-                residual_dtype=residual_dtype,
-                is_rms_norm=is_rms_norm,
-            )
-            y = y.reshape(x_shape_og)
+            with nvtx.annotate("Trition Layer Norm Fwd Quant", color="red"):
+                y, mean, rstd, residual_out = _layer_norm_fwd_quant(
+                    x,
+                    norm_weight,
+                    norm_bias,
+                    eps,
+                    residual,
+                    out_dtype=None if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype(),
+                    residual_dtype=residual_dtype,
+                    is_rms_norm=is_rms_norm,
+                )
+                y = y.reshape(x_shape_og)
             dtype = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else y.dtype
             # linear_weight = weight_quant(linear_weight).to(dtype)
             if compress_weights:
