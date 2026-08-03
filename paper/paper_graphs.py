@@ -261,13 +261,17 @@ def runtime_fraction(profiling_df):
 
     # 5. Define the non-overlapping sections of the workload
     sections = [
-        'activation quantization runtime(ns)',
-        'ternary matmul runtime(ns)',
-        'post quantization processing runtime(ns)',
-        'unpack weights runtime(ns)',
-        'LayerNormLinearQuantFn is rms norm runtime(ns)', 
-        'applying scale runtime(ns)'
+        'activation quantization',
+        'ternary matmul',
+        'post quantization processing',
+        'unpack weights',
+        'LayerNormLinearQuantFn is rms norm', 
+        'applying scale', 
+        "BitNetRMSNorm", "ReLUSquaredActivation", "BitNetRotaryEmbedding"
     ]
+    sections = [section + " runtime(ns)" for section in sections]
+    print(sections)
+    print(profiling_df)
 
     # 6. Calculate 'Other runtime' so the total equals exactly 100% of workload runtime
     profiling_df['Other runtime(ns)'] = profiling_df['workload runtime(ns)'] - profiling_df[sections].sum(axis=1)

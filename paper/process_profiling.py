@@ -29,7 +29,11 @@ with open(filename, 'w') as csvfile:
         values['model'] = "Scaled Up Bitnet" if values['model'] == 'scaled_bitnet' else values['model']
         row = {'model': values['model'], 'batch size': values['batch'], "Sequence Length": values["input_len"], "Output Length": values["output_len"]}
 
-        relevant_labels = ['workload', 'decode', 'prefill', 'ternary matmul', 'unpack weights', 'BitLinear Forward', 'activation quantization', 'post quantization processing', 'Fused Bit Linear', "LayerNormLinearQuantFn is rms norm", "applying scale"]
+        relevant_labels = ['workload', 'decode', 'prefill', 'ternary matmul', 
+                           'unpack weights', 'BitLinear Forward', 
+                           'activation quantization', 'post quantization processing', 
+                           'Fused Bit Linear', "LayerNormLinearQuantFn is rms norm", \
+                            "applying scale", "BitNetRMSNorm", "ReLUSquaredActivation", "BitNetRotaryEmbedding"]
         for label in relevant_labels: 
             row[label + " runtime(ns)"] = 0
             row[label + " intstances"] = 0
