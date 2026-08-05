@@ -123,8 +123,10 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
+torch.cuda.synchronize()
 gc.collect()
-torch.cuda.empty_cache()
+torch.cuda.synchronize()
+torch.use_deterministic_algorithms(True, warn_only=True)
 print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):

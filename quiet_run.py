@@ -146,7 +146,7 @@ with nvtx.annotate("warmup", color="white"):
         temperature=0.6)
 print_system_ram("After Models Loaded")
 gc.collect()
-torch.cuda.empty_cache()
+torch.cuda.synchronize()
 print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):

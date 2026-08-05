@@ -149,9 +149,9 @@ def all_metrics():
         tensor_core_metrics +
         blackwell_tensor +  
         time_metrics + 
-        stall_metrics + 
-        usage_metrics + 
-        jetson_memory)
+        # stall_metrics + 
+        usage_metrics) 
+        # jetson_memory)
 
 # python auto_profiler.py -s 100 --max_new_tokens 1 --model_name ridger/MMfreeLM-370M --metrics jetson --min_batch_power 0 --max_batch_power 7                                                                                                                                          
 def jetson_metrics():
