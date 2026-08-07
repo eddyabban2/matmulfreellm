@@ -7,13 +7,17 @@ mmfreelm.egg-info
 trace*.json
 *.csv
 *.txt
+!GPU_MEMORY_NOTES.txt
 graphs/
 *.png
 *.sqlite
 venv/
+bitnet/
 *.nsys-rep
 *.qdstrm
 *.log
+!tensorrt_changes.log
 *.pdf
+*.pth
 nsys_runs/
 ncu_runs/

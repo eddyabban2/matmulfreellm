@@ -1,6 +1,11 @@
 import torch
 from transformers import AutoTokenizer
 from threading import Thread
+import pandas as pd
+import numpy as np
+import pynvml
+import torch
+import nvtx
 
 def generate_random_input_ids(model_name, batch_size, sequence_length):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -11,11 +16,83 @@ def generate_random_input_ids(model_name, batch_size, sequence_length):
     # 3. Generate attention mask (typically all ones for fully valid random inputs)
     # attention_mask shape: (batch_size, sequence_length)
     attention_mask = torch.ones((batch_size, sequence_length), dtype=torch.long)
-
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask
     }
+
+def create_input_ids_from_text(model_name, text):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print("Warning: no pad token exists")
+    tokens = tokenizer(
+        text,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=False
+    )
+    input_ids = tokens.input_ids
+    attention_mask = tokens.attention_mask
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask
+    }
+
+def create_string_from_tokens(model_name, output):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    # return tokenizer.batch_decode(output, skip_special_tokens=True)
+    return tokenizer.decode(output, skip_special_tokens=True)
+
+def generate_dataset_input_ids(model_name, batch_size, sequence_length):
+    # Load tokenizer only once using caching
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    
+    # Ensure pad token exists (required for padding)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print("Warning: no pad token exists")
+
+
+    df = pd.read_parquet("hf://datasets/stanfordnlp/imdb/plain_text/train-00000-of-00001.parquet")
+    
+    sampled_indices = np.random.choice(len(df), size=batch_size, replace=False)
+    prompts = df.iloc[sampled_indices]['text'].to_list()
+
+    tokens = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=sequence_length
+    )
+    input_ids = tokens.input_ids
+    attention_mask = tokens.attention_mask
+
+    has_padding = (attention_mask == 0).any()
+    if(has_padding):
+        print("Warning: Using Padding because sequence is very long")
+
+    # Move to GPU and return
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask
+    }
+
+
+def get_free_gpu():
+    pynvml.nvmlInit()
+    num_gpus = pynvml.nvmlDeviceGetCount()
+    
+    memory_free = []
+    for i in range(num_gpus):
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        memory_free.append(info.free)
+    
+    pynvml.nvmlShutdown()
+    best = memory_free.index(max(memory_free))
+    return torch.device(f"cuda:{best}")
 
 class CustomThread(Thread):
     def __init__(self, group=None, target=None, name=None, args=(), kwargs={}, verbose=None):
@@ -31,3 +108,26 @@ class CustomThread(Thread):
     def join(self):
         super().join()
         return self._return
+
+def add_nvtx_hooks_to_every_module(model: torch.nn.Module, print_debug=False):
+    def pre_hook(module, input):
+        # Push range when the attention module starts its forward pass
+        nvtx.push_range(message=module.__class__.__name__, color="green")
+
+    def post_hook(module, input, output):
+        # Pop range when the attention module finishes
+        nvtx.pop_range()
+
+    hooked_count = 0
+    for name, module in model.named_modules():
+        if print_debug:
+            print(f"module name: {module.__class__.__name__}")
+        module.register_forward_pre_hook(pre_hook)
+        module.register_forward_hook(post_hook)
+        hooked_count += 1
+
+def main():
+    generate_dataset_input_ids("ridger/MMfreeLM-2.7B", 5, 200)
+
+if __name__ == "__main__":
+    main()

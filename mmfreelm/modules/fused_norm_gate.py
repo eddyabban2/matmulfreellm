@@ -143,7 +143,9 @@ def _layer_norm_fwd(
         if residual is not None:
             assert residual.stride(-1) == 1
             assert residual.shape == (M, N)
-        assert weight.shape == (N,)
+        # print(f"weight shape: {weight.shape}")
+        # print(f"N shape: {(N,)}")
+        # assert weight.shape == (N,)
         assert weight.stride(-1) == 1
         if bias is not None:
             assert bias.stride(-1) == 1
@@ -524,6 +526,8 @@ class FusedRMSNormSwishGate(torch.nn.Module):
 
     def reset_parameters(self):
         torch.nn.init.ones_(self.weight)
+    def increase_size(self, weight_multiplier):
+        self.weight = torch.nn.Parameter(torch.empty(int(self.weight.size(0)*weight_multiplier)))
 
     def forward(self, x, o, residual=None, prenorm=False, residual_in_fp32=False):
         return rms_norm_fn(

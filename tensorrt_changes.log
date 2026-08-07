@@ -1,0 +1,47 @@
+TensorRT integration change log (eddy_matmulfreellm)
+=====================================================
+
+2026-05-07
+----------
+- Added tensorrt_generation.py: shared ONNX export, Triton-op patching, CUDAGraphAccelerator,
+  ONNXTRTAccelerator, decode loop. TRT cache paths are derived from model_name (md5 prefix)
+  so different checkpoints do not share one engine file.
+- Refactored benchmark_trt.py to import from tensorrt_generation.py; behavior preserved;
+  ONNXTRTAccelerator now receives model_name=MODEL_NAME for cache names.
+- Updated generate.py: argparse (--model, --max-length, --iterations, --tensorrt,
+  --rebuild-trt-engine); --tensorrt wraps inference in ONNXTRTAccelerator after HF load;
+  optional --fixed-point still applied before TRT; exits with message if TRT/pycuda missing.
+- Note: previous fixed cache /tmp/mmfreelm_jetson.engine is superseded by per-model paths
+  under /tmp/mmfreelm_<hash>.{engine,onnx}.
+
+- ONNX export: for seq_len > 1 the HGRN layer used Triton fused_recurrent_hgrn (not traceable).
+  _export_onnx() temporarily binds naive_recurrent_hgrn in recurrent_fuse and hgrn_bit; restores
+  after export. TRT engine then runs the exported graph (no Triton at inference).
+
+generate.py run (sandbox): 2026-05-07 — HF DNS flake; model shards loaded from cache;
+  CUDA failed in sandbox (NvRm / driver). Re-run on-device: python3 generate.py [--tensorrt].
+
+generate.py run (device): 2026-05-07 — PyTorch path OK with --model ridger/MMfreeLM-370M.
+
+TensorRT: ONNX export OK after naive recurrent patch; trt.Builder failed with CUDA error 35
+  in this environment (TRT vs driver/context). Retry on a healthy JetPack CUDA stack.
+
+Default ridger/MMfreeLM-2.7B: NvMapMemAlloc / allocator error when moving full model to GPU
+  (OOM). Use --model ridger/MMfreeLM-370M on this device or free GPU memory and rerun.
+
+2026-05-07 (FLOPs / inference)
+---------------------------
+- PureTorchFusedBitLinear: in eval mode cache one weight_quant() tensor (same as FusedBitLinear
+  cached_weights); training still recomputes. Removes O(|W|) quant work every forward/token.
+- ternary_quantize() now defers to mmfreelm.ops.fusedbitnet.weight_quant for bitwise parity with
+  FusedBitLinear.
+- PureTorchFusedRMSNormSwishGate: correct RMSNorm + weight * (o * sigmoid(o)) matching
+  FusedRMSNormSwishGate Triton kernel; patch dispatcher no longer maps swish modules to plain
+  RMSNorm (that mis-wired recurrent output as “residual”).
+- generate.py: dense 2|θ| GFLOPS/s plus scaled “ternary MAC~” column using 1.58/16 heuristic.
+- Patched vs full Triton logits can differ at ~0.5 relative L2 in FP16 (unfused vs fused kernels);
+  acceptable for TRT/export path; use full Triton for bit-exact checks.
+
+- GPU_MEMORY_NOTES.txt: ongoing VRAM/utilization checklist; generate.py gains --low-cpu-mem and
+  --no-cache (use_cache=False) for marginal footprint / long-run savings.
+

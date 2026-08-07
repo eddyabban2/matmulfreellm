@@ -1,0 +1,54 @@
+quiet run is running
+attempting to load model
+HGRNBitForCausalLM(
+  (model): HGRNBitModel(
+    (embeddings): Embedding(32000, 2560)
+    (layers): ModuleList(
+      (0-31): 32 x HGRNBitBlock(
+        (attn_norm): RMSNorm(2560, eps=1e-06)
+        (attn): HGRNBitAttention(
+          (i_proj): FusedBitLinear(
+            in_features=2560, out_features=2560, bias=False
+            (norm): RMSNorm(2560, eps=1e-08)
+          )
+          (f_proj): FusedBitLinear(
+            in_features=2560, out_features=2560, bias=False
+            (norm): RMSNorm(2560, eps=1e-08)
+          )
+          (g_proj): FusedBitLinear(
+            in_features=2560, out_features=2560, bias=False
+            (norm): RMSNorm(2560, eps=1e-08)
+          )
+          (g_norm): FusedRMSNormSwishGate()
+          (o_proj): FusedBitLinear(
+            in_features=2560, out_features=2560, bias=False
+            (norm): RMSNorm(2560, eps=1e-08)
+          )
+        )
+        (mlp_norm): RMSNorm(2560, eps=1e-06)
+        (mlp): HGRNBitMLP(
+          (gate_proj): FusedBitLinear(
+            in_features=2560, out_features=13824, bias=False
+            (norm): RMSNorm(2560, eps=1e-08)
+          )
+          (down_proj): FusedBitLinear(
+            in_features=6912, out_features=2560, bias=False
+            (norm): RMSNorm(6912, eps=1e-08)
+          )
+          (act_fn): SiLU()
+        )
+      )
+    )
+    (norm): RMSNorm(2560, eps=1e-06)
+  )
+  (lm_head): FusedBitLinear(
+    in_features=2560, out_features=32000, bias=False
+    (norm): RMSNorm(2560, eps=1e-08)
+  )
+)
+loaded model
+warmup running
+After Models Loaded: CPU 1.88 GB GPU: 0.80 GB
+warmup finished
+switching now
+inference worked

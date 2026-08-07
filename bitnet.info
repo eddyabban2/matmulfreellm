@@ -1,0 +1,36 @@
+quiet run is running
+attempting to load model
+BitNetForCausalLM(
+  (model): BitNetModel(
+    (embed_tokens): Embedding(128256, 2560)
+    (layers): ModuleList(
+      (0-29): 30 x BitNetDecoderLayer(
+        (self_attn): BitNetAttention(
+          (q_proj): BitLinear()
+          (k_proj): BitLinear()
+          (v_proj): BitLinear()
+          (o_proj): BitLinear()
+          (attn_sub_norm): BitNetRMSNorm((2560,), eps=1e-05)
+        )
+        (mlp): BitNetMLP(
+          (gate_proj): BitLinear()
+          (up_proj): BitLinear()
+          (down_proj): BitLinear()
+          (act_fn): ReLUSquaredActivation()
+          (ffn_sub_norm): BitNetRMSNorm((6912,), eps=1e-05)
+        )
+        (input_layernorm): BitNetRMSNorm((2560,), eps=1e-05)
+        (post_attention_layernorm): BitNetRMSNorm((2560,), eps=1e-05)
+      )
+    )
+    (norm): BitNetRMSNorm((2560,), eps=1e-05)
+    (rotary_emb): BitNetRotaryEmbedding()
+  )
+  (lm_head): Linear(in_features=2560, out_features=128256, bias=False)
+)
+loaded model
+warmup running
+After Models Loaded: CPU 2.02 GB GPU: 1.13 GB
+warmup finished
+switching now
+inference worked

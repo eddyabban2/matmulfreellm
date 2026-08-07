@@ -9,77 +9,36 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids
+import gc
+from torch.profiler import profile, ProfilerActivity
+from transformers import AutoModelForCausalLM, logging
+from utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
+import transformers.integrations.bitnet as bitnet
+
+import bitnet as local_bitnet
+import mmfreelm
+from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+from mmfreelm.ops.fusedbitnet import CompressedType
+
+bitnet.pack_weights = local_bitnet.pack_weights
+bitnet.unpack_weights = local_bitnet.unpack_weights
+bitnet.BitLinear = local_bitnet.BitLinear
+bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
+bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
 )
 
-parser.add_argument(
-    "-s", 
-    "--sequence_length",
-    default=32,
-    help="sets the sequence length of input tokens"
-)
-
-parser.add_argument( 
-    "--max_new_tokens",
-    default=32,
-    help="sets the sequence length of input tokens"
-)
-
-parser.add_argument(
-    "-i", 
-    "--iterations",
-    default=5,
-    help="Determines the number of iterations to benchmark for"
-)
-
-parser.add_argument (
-    "-f",
-    "--fixed_point",
-    action="store_true",
-    help="Switches the model to fixed point",
-)
-
-parser.add_argument(
-    "--min_batch_power", 
-    default=0,
-    help="stores the minimum batch power to go up to when profiling",
-)
-
-parser.add_argument(
-    "--max_batch_power", 
-    default=1,
-    help="stores the maximum batch power to go up to when profiling",
-)
-
-parser.add_argument(
-    "--use_original",
-    action='store_true',
-    default=False,
-    help="changes the model to using the original implementation"
-)
-
-args = parser.parse_args()
-
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
-
 logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-# 2. Suppress HuggingFace Hub logging (where shard-loading prints originate)
 logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
@@ -115,7 +74,7 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
                 )
     return prof
 
-def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
+def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
     
     results = {
@@ -128,19 +87,23 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
             'energy_per_iteration_joules': [],
             'joules_per_token': []
         }
-    
-    batch = generate_random_input_ids(model_name, batch_size, seq_len)
+    batch = None
+    if use_dataset_prompts:
+        batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
+    else:    
+        batch = generate_random_input_ids(model_name, batch_size, seq_len)
+
     input_ids = batch["input_ids"].cuda()
     attention_mask = batch["attention_mask"].cuda()
 
-    power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
-    monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
-    window_key = f"Batch Size {batch_size} Seq Len {seq_len}"
+    # power_monitor = PowerMonitor(gpu_indices=[torch.cuda.current_device()])
+    # monitor = ZeusMonitor(gpu_indices=[torch.cuda.current_device()])
+    # window_key = f"Batch Size {batch_size} Seq Len {seq_len}"
 
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
+        max_new_tokens=1,
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
@@ -151,6 +114,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
             max_new_tokens=max_new_tokens,
             do_sample=True,
             top_p=0.4,
@@ -169,11 +133,61 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
     row['tokens_per_second'] = statistics.mean(results['tps'])
     row['run_time_seconds'] = statistics.mean(results["generation_time"])
 
-def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B'):
+def detailed_runtime_metrics(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
+
+    if use_dataset_prompts:
+        batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
+    else:    
+        batch = generate_random_input_ids(model_name, batch_size, seq_len)
+
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+    prefill_times = []
+    decode_times = []
+    for _ in range(num_iterations):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        with torch.no_grad():
+            out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+        torch.cuda.synchronize()
+        end_time = time.time()
+
+        prefill_time = end_time - start_time
+        prefill_times.append(prefill_time)
+        curr_decode_times = []
+        past = out.past_key_values
+        next_tok = out.logits[:, -1:, :].argmax(-1)
+        with torch.no_grad():
+            for i in range(max_new_tokens-1):
+                    torch.cuda.synchronize()
+                    start_time = time.time()
+                    out = model(input_ids=next_tok, past_key_values=past,
+                                use_cache=True, return_dict=True)
+                    past = out.past_key_values
+                    next_tok = out.logits[:, -1:, :].argmax(-1)
+                    torch.cuda.synchronize()
+                    end_time = time.time()
+                    curr_decode_times.append(end_time - start_time)
+            decode_times.append(curr_decode_times)
+    row["Avg Prefill Time (s)"] = statistics.mean(prefill_times)
+    row["Max Prefill Time (s)"] = max(prefill_times)
+    row["Min Prefill Time (s)"] = min(prefill_times)
+    all_single_decode_times = [t for iteration in decode_times for t in iteration]
+    total_decode_times = [sum(iteration) for iteration in decode_times]
+    row["Avg Single Deocde Time (s)"] = statistics.mean(all_single_decode_times)
+    row["Min Single Deocde Time (s)"] = min(all_single_decode_times)
+    row["Max Single Deocde Time (s)"] = max(all_single_decode_times)
+    row[f"Avg Deocde Time For {max_new_tokens-1} Tokens (s)"] = statistics.mean(total_decode_times)
+    row[f"Max Deocde Time For {max_new_tokens-1} Tokens (s)"] = max(total_decode_times)
+    row[f"Min Deocde Time For {max_new_tokens-1} Tokens (s)"] = min(total_decode_times)
+
+def first_token_time(model, batch_size, seq_len, num_iterations, model_name='ridger/MMfreeLM-2.7B', use_dataset_prompts=False):
     """Run benchmark with multiple prompts and iterations."""
-    
-    
-    batch = generate_random_input_ids(model_name, batch_size, seq_len)
+    if use_dataset_prompts:
+        batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
+    else:    
+        batch = generate_random_input_ids(model_name, batch_size, seq_len)
+
     input_ids = batch["input_ids"].cuda()
     attention_mask = batch["attention_mask"].cuda()
     times = []
@@ -192,6 +206,7 @@ def first_token_time(model, batch_size, seq_len, num_iterations, model_name='rid
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=1,
             max_new_tokens=1,
             do_sample=True,
             top_p=0.4,
@@ -249,6 +264,20 @@ def profile_generation(model, batch_size, seq_len, num_iterations, max_new_token
     row ["CPU_time_seconds"] = cpu_time
     row["CUDA_time_seconds"] = cuda_time
 
+def run_warmup(model, model_name):
+    batch = generate_random_input_ids(model_name, 1, 1)
+    input_ids = batch["input_ids"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+
+    # run a warm up generate 
+    _ = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=1,
+        do_sample=True,
+        top_p=0.4,
+        temperature=0.6)
+
 def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, row, model_name='ridger/MMfreeLM-2.7B'):
     # create random input tokens
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
@@ -259,6 +288,7 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
+        min_new_tokens=1,
         max_new_tokens=max_new_tokens,
         do_sample=True,
         top_p=0.4,
@@ -271,19 +301,20 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     start_time = time.time()
     monitor.begin_window(window_key, sync_execution=True)
     for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
+        model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            top_p=0.4,
+            temperature=0.6
+        )
     mes = monitor.end_window(window_key, sync_execution=True)
     end_time = time.time()
     timeline = power_monitor.get_power_timeline(
-        power_domain="device_instant",  # or "device_average" or "memory_average"
-        gpu_index=0,  # specify GPU, or None for all GPUs
+        power_domain="device_instant",
+        gpu_index=0,
         start_time=start_time,
         end_time=end_time
     )
@@ -296,56 +327,75 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['energy_per_iteration_joules'] = mes.gpu_energy[0] / num_iterations
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
-def create_csv_data(sequence_length, iters, max_new_tokens):
+def set_ridger_compression(compression, model):
+    for layer in model.model.layers: 
+        layer.set_compression(compression)
+def set_bitnet_compression(compression, model):
+    compression = (compression == CompressedType.NAIVE) 
+    for layer in model.model.layers:
+        layer.self_attn.q_proj.compress_weights = compression
+        layer.self_attn.k_proj.compress_weights = compression
+        layer.self_attn.v_proj.compress_weights = compression
+        layer.self_attn.o_proj.compress_weights = compression
+
+        layer.mlp.gate_proj.compress_weights = compression
+        layer.mlp.up_proj.compress_weights = compression
+        layer.mlp.down_proj.compress_weights = compression
+
+def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/MMfreeLM-2.7B'):
     device = torch.cuda.get_device_name(torch.cuda.current_device())
-    # models = ['ridger/MMfreeLM-370M', 'ridger/MMfreeLM-1.3B','ridger/MMfreeLM-2.7B']
-    models = ['ridger/MMfreeLM-2.7B']
     print("Collecting Data to be used in a CSV")
     first_row = True
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now())
     with open(filename, 'w') as csvfile:
         csvwriter = None  
-        for model_name in models:
-            row = {'device': device, 'model': model_name}
-            if args.use_original:
-                row['model'] += " Original"
-            else:
-                row['model'] += " Newer"
-            print(f"Collecting data for model: {model_name}")
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-            for batch_power in range(min_batch_power, max_batch_power):
+        row = {'device': device, 'model': model_name}
+        print(f"Collecting data for model: {model_name}")
+        compressionType = [CompressedType.FLOAT16, CompressedType.NAIVE]
+        for packed in compressionType:
+            model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
+            if 'ridger' in model_name:
+                model = model.half()
+                set_ridger_compression(packed, model)
+            if 'bitnet' in model_name: 
+                set_bitnet_compression(packed, model)
+            row["Weight Packing"] = packed 
+            run_warmup(model, model_name)
+            gc.collect()
+            torch.cuda.empty_cache()
+            row["Memory Usage"] = torch.cuda.memory_allocated()/(1024**3)
+            for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
                 row['batch size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
                 print(f"\t\tRunning Benchmarks...")
                 start_time = time.time()
-                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                benchmark_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                 end_time = time.time()
                 print(f"\t\t\tBenchmarks completed in {end_time-start_time} sec")
 
-                # profile_generation(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-
-                # print(f"\t\tCollecting time to first token data...")
-                # start_time = time.time()
-                # row['time_to_first_token_sec'] = statistics.mean(first_token_time(model, batch_size, sequence_length, iters, model_name=model_name))
-                # end_time = time.time()
-                # print(f"\t\t\tTTTFL completed in {end_time-start_time} sec")
-
-                # print("\t\t Collecting Power data")
-                # start_time = time.time()
-                # get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
-                # end_time = time.time()
-                # print(f"\t\t\tPower Data completed in {end_time-start_time} sec")
+                start_time = time.time()
+                detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
+                end_time = time.time()
+                print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+                if args.collect_power_data:
+                    get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()
                     first_row = False
                 csvwriter.writerow(row) 
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+
         print(f"Data written to {filename}")
+    if args.print_csv:
+        with open(filename, "r") as file:
+            print(file.read())
 
 def main():
     if args.fixed_point:
@@ -356,7 +406,78 @@ def main():
     iters=int(args.iterations)
     max_new_tokens=int(args.max_new_tokens)
     
-    create_csv_data(sequence_length, iters, max_new_tokens)
+    create_csv_data(sequence_length, iters, max_new_tokens, model_name=args.model)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="creates a csv file with benchmark results"
+    )
+
+    parser.add_argument(
+        "-s", 
+        "--sequence_length",
+        default=32,
+        help="sets the sequence length of input tokens"
+    )
+
+    parser.add_argument( 
+        "--max_new_tokens",
+        default=2,
+        help="sets the sequence length of input tokens"
+    )
+
+    parser.add_argument(
+        "-i", 
+        "--iterations",
+        default=5,
+        help="Determines the number of iterations to benchmark for"
+    )
+
+    parser.add_argument (
+        "-f",
+        "--fixed_point",
+        action="store_true",
+        help="Switches the model to fixed point",
+    )
+
+    parser.add_argument(
+        "--min_batch_power", 
+        default=0,
+        help="stores the minimum batch power to go up to when profiling",
+    )
+
+    parser.add_argument(
+        "--max_batch_power", 
+        default=1,
+        help="stores the maximum batch power to go up to when profiling",
+    )
+
+    parser.add_argument(
+        "--use_original",
+        action='store_true',
+        default=False,
+        help="changes the model to using the original implementation"
+    )
+
+    parser.add_argument(
+        "--print_csv",
+        action='store_true',
+        default=False,
+        help="prints csv after creating data"
+    )
+
+    parser.add_argument(
+        "--model", 
+        default="ridger/MMfreeLM-2.7B",
+        help="selects model",
+    )
+
+    parser.add_argument(
+        "--collect_power_data",
+        action='store_true',
+        default=False,
+        help="changes whether we collect power data"
+    )
+
+    args = parser.parse_args()
     main()

@@ -1,27 +1,28 @@
 # Used To Collect Roofline Data
-#   python auto_profiler.py -s 20 --max_new_tokens 10 --min_batch_power 6 --max_batch_power 6 
-
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name microsoft/bitnet-b1.58-2B-4T
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8 --model_name microsoft/bitnet-b1.58-2B-4T
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name scaled_mmfree
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 7 --max_batch_power 7 --model_name scaled_mmfree
 import subprocess
 import argparse
 import sys
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
-import torch
-from torch.profiler import profile, record_function, ProfilerActivity, schedule
-from torch.utils.flop_counter import FlopCounterMode
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-import transformers
 import csv
 import pandas as pd
 import datetime
+import metrics_helper
+import io
 
 from pathlib import Path
 sys.path.append('..')
-import mmfreelm
 import logging
 from utils import CustomThread
 curr_date=datetime.datetime.today().strftime('%m-%d-%Y')
+curr_date_time= datetime.datetime.now().strftime("%B %d, %Y at %I:%M%p")
 logger = logging.getLogger(__name__)
 FORMAT = "[%(asctime)s] [%(levelname)s] %(filename)s:%(lineno)s - %(funcName)s ] %(message)s"
 logging.basicConfig(format=FORMAT, filename=f'../outputs/logs/{curr_date}.log', filemode='a')
@@ -39,8 +40,15 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "-m",
+    "--model_name",
+    default="ridger/MMfreeLM-2.7B",
+    help="sets the model name"
+)
+
+parser.add_argument(
     "--max_new_tokens",
-    default="1",
+    default="2",
     help="sets the number of new tokens to be generated"
 )
 
@@ -56,99 +64,67 @@ parser.add_argument(
     help="sets the minimum batch power"
 )
 parser.add_argument(
-    '-t',
-    '--test',
-    default=False,
-    action='store_true'    
-)
-
+    '--metrics', 
+    choices=['all', 'jetson'],
+    default="all")
 
 args = parser.parse_args()
-
-double_precision_metrics = [ "sm__sass_thread_inst_executed_op_dadd_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dfma_pred_on.sum", 
-        "sm__sass_thread_inst_executed_op_dmul_pred_on.sum" ]
-single_precision_metrics = ["sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]
-half_precision_metrics = ["sm__sass_thread_inst_executed_op_hadd_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hmul_pred_on.sum",
-        "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]
-tensor_core_metrics = ["sm__ops_path_tensor_op_hmma_pred_on.sum",
-        "sm__ops_path_tensor_op_imma_pred_on.sum"]
-metrics_string = ",".join(["dram__bytes.sum", "gpu__time_duration.sum"] + 
-        double_precision_metrics + 
-        single_precision_metrics + 
-        half_precision_metrics +
-         tensor_core_metrics)
-
 
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
 logger.debug(f"Extracted ncu path: {ncu_path}")
 os.chdir('../')
 
-def run_ncu_profile(bs, new_tokens, seq_len):
-    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+metrics_string = None
+if(args.metrics == "all"):
+    metrics_string = metrics_helper.all_metrics()
+elif(args.metrics == "jetson"):
+    metrics_string = metrics_helper.jetson_metrics()
+
+def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    model_name = model_name.replace("/", "-")
+    return  os.getcwd() + "/outputs/ncu_runs/autoProfilerFor" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    
+
+def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
+    quiet_run_file = '/quiet_run.py'
+    if model_name == 'scaled_mmfree': 
+        quiet_run_file = "/scaled_mmfree_quiet_run.py"
+    elif model_name == 'scaled_bitnet':
+        quiet_run_file = "/scaled_bitnet_quiet_run.py"
     benchmark_command = [
         ncu_path, "--nvtx",
-        # "--nvtx", "--nvtx-include", "workload/HGRNBitAttentionForward/HGRNBitMLP/",
-        # "--nvtx-exclude", "warmup/",
         "--nvtx-include", "workload/",
-        # "--nvtx-include", "HGRNBitAttentionForward/",
-        # "--nvtx-include", "HGRNBitMLP/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
-        "--replay-mode", "application",
-        "--app-replay-match", "name",
+        # "--replay-mode", "application",
+        # "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
         "--metrics", metrics_string,
-        "python", "quiet_run.py",
+        "python", os.getcwd() + quiet_run_file,
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),
-        "-i", "1"
+        "-i", "1", 
+        # "--use_dataset_prompts", 
+        "--prefill_decode"
     ]
+    if "scaled" not in model_name:
+        benchmark_command.append("--model_name")
+        benchmark_command.append(model_name)
     logger.debug(f"running command {' '.join(benchmark_command)}")
-    logger.debug(f"this is changing")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
+    start_time = time.time()
     subprocess.run(benchmark_command, check=True)
+    end_time = time.time()
+    logger.debug(f"Command took {end_time-start_time} seconds")
     
-def extract_data_from_ncu_files(bs, new_tokens, seq_len):
-    logger.info("extracting data")
-    report_name = os.getcwd() + "/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
-    extract_data_command = [
-        ncu_path, 
-        "--import", report_name + ".ncu-rep",  
-        "--page", "raw",
-        "--metrics", metrics_string
-    ]
-
-    logger.debug(f"running command {' '.join(extract_data_command)}")
-    data = subprocess.check_output(extract_data_command).decode('ascii')
-    logger.debug(f"data extracted: {data[:100000]}")
-    logger.debug("data extracted now parsing data")
-    data = data.splitlines()
-    results = {}
-    total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us = parse_data_from_ncu_files(data)
-    results["KiloBytes Accessed"] = total_kilo_bytes
-    results["Double Precision FLOPs"] = double_precision_count
-    results["Single Precision FLOPs"] = single_precision_count
-    results["Half Precision FLOPs"] = half_precision_count
-    results["Tensor FLOPs"] = tensor_count
-    results["Run Time (s)"] = run_time_us / 1e6
-    results["(NCU) Total FLOPs"] = double_precision_count + single_precision_count + half_precision_count + tensor_count
-    results['Model Name'] = 'ridger/MMfreeLM-2.7B'
-    results['Batch Size'] = bs
-    results['Tokens Generated'] = new_tokens 
-    results['Input Sequence Length'] = seq_len
-    logger.info(f"row generated: {results}")
-    return results
-
-def get_kernels_from_data_frame(df): 
+def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
     unit_conversions = {
+        "byte": 1e-3,
         "Kbyte": 1,
         "Mbyte": 1e3,
         "Gbyte": 1e6,
@@ -157,13 +133,20 @@ def get_kernels_from_data_frame(df):
         "s":    1e6,
         "ns":   1e-3,
         "inst": 1,
+        "1/ns" : 1, 
+        "1/s": 1e-9,
+        "inst/ns": 1,
+        "inst/us": 1e-3,
+        "inst/s": 1e-9 
     }
 
     # Canonical names for the base units
     canonical_unit = {
-        "Kbyte": "Kbyte", "Mbyte": "Kbyte", "Gbyte": "Kbyte",
+        "byte": "Kbyte", "Kbyte": "Kbyte", "Mbyte": "Kbyte", "Gbyte": "Kbyte",
         "us": "us", "ms": "us", "ns": "us", "s": "us",
         "inst": "inst",
+        "1/ns": "1/ns", "1/s": "1/ns",
+        "inst/ns": "inst/ns", "inst/s": "inst/ns", "inst/us": "inst/ns"
     }
 
     df["Metric Value"] = df["Metric Value"].astype(float)
@@ -183,41 +166,101 @@ def get_kernels_from_data_frame(df):
         values="Metric Value",
         aggfunc="first"
     ).reset_index()
+    
+    logger.info(list(df_flat.columns.values))
 
     df_flat.columns.name = None
-    flops = (df_flat["sm__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
-             df_flat["sm__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
-             df_flat["sm__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"]
+    return df_flat
+
+def add_additional_columns(df, bs, new_tokens, seq_len):
+
+    # dram_estimation = (df["lts__d_sectors_fill_device.sum (sector)"]*32 + df["lts__d_sectors_fill_sysmem.sum (sector)"]*32) / 1000
+    # if "dram__bytes.sum (Kbyte)" not in df:
+    #     df["dram__bytes.sum (Kbyte)"] = dram_estimation
+    # else: 
+    #     df["estimated dram__bytes.sum (Kbyte)"] = dram_estimation
+    #     df["accuracy of dram_bytes estimation (%)"] = df["estimated dram__bytes.sum (Kbyte)"] / df["dram__bytes.sum (Kbyte)"]
+    #     logger.info("description of dram bytes estimation accuracy")
+    #     logger.info(df["accuracy of dram_bytes estimation (%)"].describe())
+
+    double_precision_flops = (df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
+             df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"])
+    single_precision_flops =(df["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"])
+    half_precision_flops = (
+             df["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"]+
+             df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"])
+
+    df["Single Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_second (inst/ns)'] +
+        (df['smsp__sass_thread_inst_executed_op_ffma_pred_on.sum.per_second (inst/ns)']*2)
+    ) 
+    df["Half Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_hadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_hmul_pred_on.sum.per_second (inst/ns)'] +
+       (df['smsp__sass_thread_inst_executed_op_hfma_pred_on.sum.per_second (inst/ns)']*2)
         )
-    df_flat["Compute Intensity"] = flops / (df_flat["dram__bytes.sum (Kbyte)"] * 1e3)
-    df_flat.to_csv(f"outputs/csvs/kernels-{curr_date}.csv")
+    df["Double Precision GFLOP/s"] = (
+        df['smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_second (inst/ns)'] +
+        df['smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_second (inst/ns)'] +
+       (df['smsp__sass_thread_inst_executed_op_dfma_pred_on.sum.per_second (inst/ns)']*2)
+    )
+
+    tensor_inst_rate= "smsp__inst_executed_pipe_tensor_op_hmma.sum.per_second (inst/ns)" 
+    tensor_flop_correction_factor = 1 
+    tensor_flop_rate = None 
+    if "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)" in df: 
+        tensor_flop_rate = "smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (nan)"
+        tensor_flop_correction_factor = 1e9 
+    elif 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/ns)' in df: 
+        tensor_flop_rate = 'smsp__ops_path_tensor_src_fp16_dst_fp32.sum.per_second (1/ns)'
+
+    df["Half Precision Matrix Multiply and Accumulate Instructions (Inst/s)"] = df[tensor_inst_rate]/1e-9
+    tensor_flops = df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"] + df["smsp__ops_path_tensor_src_bf16_dst_fp32.sum (nan)"]
+    df["Tensor Math Ops (16bit to 32 bit) (Billion Per Second)"] = df[tensor_flop_rate] / tensor_flop_correction_factor
+
+    df["(Double Precision) Compute Intensity"] = double_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Single Precision) Compute Intensity"] = single_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Half Precision) Compute Intensity"] = half_precision_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["(Tensor Cores) Compute Intensity"] = tensor_flops / (df["dram__bytes.sum (Kbyte)"] * 1e3)
+    df["Workload"] = f"Batch{bs}, NewTokens: {new_tokens} Sequence Length: {seq_len}"
+    return df
 
 def extract_flops(df): 
-    # Multiply Accumulate is two instructions so we cound all of them a second time
-    double_precision_count = (df[df["Metric Name"].isin(double_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_dfma_pred_on.sum"]["Metric Value"].astype(float).sum())
-    single_precision_count = (df[df["Metric Name"].isin(single_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"]["Metric Value"].astype(float).sum())
-    half_precision_count = (df[df["Metric Name"].isin(half_precision_metrics)]["Metric Value"].astype(float).sum()
-        + df[df["Metric Name"] == "sm__sass_thread_inst_executed_op_hfma_pred_on.sum"]["Metric Value"].astype(float).sum())
+    double_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"].sum() + 
+        df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"].sum() +
+        df["smsp__sass_thread_inst_executed_op_dmul_pred_on.sum (inst)"].sum()
+    )
+    single_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_fadd_pred_on.sum (inst)"].sum() +
+        df["smsp__sass_thread_inst_executed_op_ffma_pred_on.sum (inst)"].sum() +
+        df["smsp__sass_thread_inst_executed_op_fmul_pred_on.sum (inst)"].sum()
+    )
+
+    half_precision_flops = (
+        df["smsp__sass_thread_inst_executed_op_hadd_pred_on.sum (inst)"].sum() +
+        df["smsp__sass_thread_inst_executed_op_hfma_pred_on.sum (inst)"].sum() +
+        df["smsp__sass_thread_inst_executed_op_hmul_pred_on.sum (inst)"].sum()
+    )
+
+    tensor_count = (df["smsp__ops_path_tensor_src_fp16_dst_fp32.sum (nan)"].sum() +
+                    df["smsp__ops_path_tensor_src_bf16_dst_fp32.sum (nan)"].sum())
     
-    tensor_count = df[df["Metric Name"].isin(tensor_core_metrics)]["Metric Value"].astype(float).sum()
+    return double_precision_flops, single_precision_flops, half_precision_flops, tensor_count
 
-    return double_precision_count, single_precision_count, half_precision_count, tensor_count
+
 def extract_dram_usage(df):
-    total_kilo_bytes = 0
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Kbyte")]["Metric Value"].astype(float).sum()
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Mbyte")]["Metric Value"].astype(float).sum() * 1e3
-    total_kilo_bytes+= df[(df["Metric Name"] == "dram__bytes.sum") & (df["Metric Unit"] == "Gbyte")]["Metric Value"].astype(float).sum() * 1e6
-    return total_kilo_bytes
+    return df["dram__bytes.sum (Kbyte)"].sum()
 
-def get_metrics_from_data_frame(df):
+def extract_run_time(df):
+    return df["gpu__time_duration.sum (us)"].sum()
+
+def get_metrics_from_data_frame(df, fraction_of_memory_from_weights):
     total_kilo_bytes = 0
     double_precision_count = 0 
     single_precision_count = 0 
@@ -226,29 +269,13 @@ def get_metrics_from_data_frame(df):
     run_time_us = 0
 
     total_kilo_bytes += extract_dram_usage(df)
-
-    valid_dram_units = ["Kbyte", "Mbyte", "Gbyte"]
-    invalid_dram_rows = df[(df["Metric Name"] == "dram__bytes.sum") & (~df["Metric Unit"].isin(valid_dram_units))]
-    if len(invalid_dram_rows) != 0:
-        logger.error("Invalid Dram rows detected")
-        logger.error(invalid_dram_rows.head())
-        exit()
-
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
-
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "us")]["Metric Value"].astype(float).sum()
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "ms")]["Metric Value"].astype(float).sum() * 1e3
-    run_time_us += df[(df["Metric Name"] == "gpu__time_duration.sum") & (df["Metric Unit"] == "s")]["Metric Value"].astype(float).sum() * 1e6
-
-    valid_time_units = ["ms", "us"]
-    invalid_time_rows = df[(df["Metric Name"] == "gpu__time_duration.sum") & (~df["Metric Unit"].isin(valid_time_units))]
-    if len(invalid_time_rows) != 0:
-        logger.error("Invalid time rows detected")
-        logger.error(invalid_time_rows.head())
-        exit()
+    run_time_us += extract_run_time(df)
 
     results = {}
     results["Gigabytes Accessed"] = total_kilo_bytes / 1e6
+    results["(Effective) Gigabytes Accessed"] = ((total_kilo_bytes*fraction_of_memory_from_weights)/8 + ((1-fraction_of_memory_from_weights)*total_kilo_bytes)) / 1e6
+
     results["Double Precision FLOPs"] = double_precision_count
     results["Single Precision FLOPs"] = single_precision_count
     results["Half Precision FLOPs"] = half_precision_count
@@ -257,11 +284,17 @@ def get_metrics_from_data_frame(df):
     results["(NCU) Total GFLOPs"] = (double_precision_count + single_precision_count + half_precision_count + tensor_count) / 1e9
     results["GFLOPs/s"] = results["(NCU) Total GFLOPs"] / results["Run Time (s)"]
     results["Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["Gigabytes Accessed"]
+    results["(Effective) Compute Intensity"] = results["(NCU) Total GFLOPs"] / results["(Effective) Gigabytes Accessed"]
+    results["(Double Precision) Compute Intensity"] = (double_precision_count/1e9) / results["Gigabytes Accessed"]
+    results["(Single Precision) Compute Intensity"] = (single_precision_count/1e9) / results["Gigabytes Accessed"]
+    results["(Half Precision) Compute Intensity"] = (half_precision_count/1e9) / results["Gigabytes Accessed"]
+    results["(Tensor) Compute Intensity"] = (tensor_count/1e9) / results["Gigabytes Accessed"]
+
     return results
 
-def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
+def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     logger.info("attempting to extract data using a csv")
-    report_name = os.getcwd() + "/outputs/ncu_runs/roofline_data_batch"+ str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
     csv_name = report_name +".csv"
     extract_data_command = [
         ncu_path, 
@@ -272,51 +305,159 @@ def extract_data_from_ncu_files_via_csv(bs, new_tokens, seq_len):
     logger.info(' '.join(extract_data_command))
     with open(csv_name, "w") as f:
         subprocess.run(extract_data_command, check=True, stdout=f)
-    df = pd.read_csv(csv_name)
+    with open(csv_name, "r") as f:
+        raw_lines = f.readlines()
+    clean_lines = [line for line in raw_lines if not line.startswith("==")]
+    
+    df = pd.read_csv(io.StringIO("".join(clean_lines)))
     df = df.replace(',','', regex=True)
+    return df
 
-    full_workload_row = get_metrics_from_data_frame(df)
-    full_workload_row['Workload'] = f'2.7B end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
+    weight_floats = (2560*2560*4 + 13824*2560 + 2560*6912)*32 + 32000*2560
+    activation_floats = (2560*bs*seq_len*5 + 6912*bs*seq_len)*32 + (bs*seq_len*2560)
+    output_floats = (2560*bs*seq_len*5 + 13824*bs*seq_len)*32 + (bs*seq_len*32000)
+    return weight_floats/(weight_floats+ activation_floats + output_floats)
+
+def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+    clean_model_name = model_name.replace("/","-")
+    workload_string = f"model{clean_model_name}-{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}"
+    df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
+    df.head(n=10000).to_csv(os.getcwd()+ f"/outputs/csvs/unflattened_kernels-{workload_string}.csv")
+    df = flatten_kernels(df)
+    # df = add_additional_columns(df, bs, new_tokens, seq_len)
+    df.head(n=10000).to_csv(f"outputs/csvs/flattened-kernels-with_metrics-{workload_string}.csv")
+    fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
+    full_workload_row = get_metrics_from_data_frame(df, fraction_of_memory_from_weights)
+    full_workload_row['Workload'] = f'{clean_model_name} end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])
-
-    has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
-    has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
-    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('linearFunction')
-    first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
-    first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
+    if 'ridger' in model_name:
+        has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
+        has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
+        first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
+        first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
+    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('ternary matmul')
+    has_prefill = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')
+    has_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep0')
+    has_second_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep1')
     linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
+    prefill_kernels_df = get_continous_group_of_kernals(df, has_prefill, 0)
+    if not (has_second_decode == False).all():
+        second_decode_kernels_df = get_continous_group_of_kernals(df, has_second_decode, 0)
+        second_decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/second_decode_kernels-{workload_string}.csv")
 
-    first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df)
-    first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
-    first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df)
-    first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    decode_kernels_df = get_continous_group_of_kernals(df, has_decode, 0)
+    prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
+    decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
 
-    linear_region_row = get_metrics_from_data_frame(linear_kernels_df)
+
+    decode_string = f'{clean_model_name} decode with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    extract_additional_workload_data(decode_kernels_df, decode_string)
+
+    prefill_string = f'{clean_model_name} prefill with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    extract_additional_workload_data(prefill_kernels_df, prefill_string)
+    
+    if 'ridger' in workload_string:
+        first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
+        first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+        first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df, fraction_of_memory_from_weights)
+        first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+        first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
+        first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
+
+    linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
     linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
-    first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
-    get_kernels_from_data_frame(first_pair)
+    prefill_region_row = get_metrics_from_data_frame(prefill_kernels_df, fraction_of_memory_from_weights)
+    prefill_region_row['Workload'] = f'2.7B first prefill region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+
+    decode_region_row = get_metrics_from_data_frame(decode_kernels_df, fraction_of_memory_from_weights)
+    decode_region_row['Workload'] = f'2.7B first decode region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     logger.info(f"full workload row generated: {full_workload_row}")
-    return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row]
+    if 'ridger' in workload_string:
+        return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row, prefill_region_row, decode_region_row]
+    return [full_workload_row, linear_region_row, prefill_region_row, decode_region_row]
 
 def extract_additional_workload_data(df, workload_str):
-    # fraction of 16, 32, adn 64 bit floating point operations 
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)
     flop_count = double_precision_count +  single_precision_count +  half_precision_count +  tensor_count
+    run_time_us = extract_run_time(df)
     dram_kbytes_accessed = extract_dram_usage(df)
 
+    
     atten_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')]
     atten_double_precision_count, atten_single_precision_count, atten_half_precision_count, atten_tensor_count = extract_flops(atten_df)
     atten_flop_count = atten_double_precision_count +  atten_single_precision_count +  atten_half_precision_count +  atten_tensor_count
+    atten_run_time_us = extract_run_time(atten_df)
+    atten_dram_kbytes_accessed = extract_dram_usage(atten_df)
 
     mlp_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')]
     mlp_double_precision_count, mlp_single_precision_count, mlp_half_precision_count, mlp_tensor_count = extract_flops(mlp_df)
     mlp_flop_count = mlp_double_precision_count +  mlp_single_precision_count +  mlp_half_precision_count +  mlp_tensor_count
+    mlp_run_time_us = extract_run_time(mlp_df)
+    mlp_dram_kbytes_accessed = extract_dram_usage(mlp_df)
+
+    scalar_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('applying scale')]
+    scalar_double_precision_count, scalar_single_precision_count, scalar_half_precision_count, scalar_tensor_count = extract_flops(scalar_df)
+    scalar_flop_count = scalar_double_precision_count +  scalar_single_precision_count +  scalar_half_precision_count +  scalar_tensor_count
+    scalar_run_time_us = extract_run_time(scalar_df)
+    scalar_dram_kbytes_accessed = extract_dram_usage(scalar_df)
+
+    linear_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('ternary matmul')]
+    linear_double_precision_count, linear_single_precision_count, linear_half_precision_count, linear_tensor_count = extract_flops(linear_df)
+    linear_flop_count = linear_double_precision_count +  linear_single_precision_count +  linear_half_precision_count +  linear_tensor_count
+    linear_run_time_us = extract_run_time(linear_df)
+    linear_dram_kbytes_accessed = extract_dram_usage(linear_df)
+
+    unpack_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('unpack weights')]
+    unpack_double_precision_count, unpack_single_precision_count, unpack_half_precision_count, unpack_tensor_count = extract_flops(unpack_df)
+    unpack_flop_count = unpack_double_precision_count +  unpack_single_precision_count +  unpack_half_precision_count +  unpack_tensor_count
+    unpack_run_time_us = extract_run_time(unpack_df)
+    unpack_dram_kbytes_accessed = extract_dram_usage(unpack_df)
+
+    post_quant_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('post quantization processing')]
+    post_quant_double_precision_count, post_quant_single_precision_count, post_quant_half_precision_count, post_quant_tensor_count = extract_flops(post_quant_df)
+    post_quant_flop_count = post_quant_double_precision_count +  post_quant_single_precision_count +  post_quant_half_precision_count +  post_quant_tensor_count
+    post_quant_run_time_us = extract_run_time(post_quant_df)
+    post_quant_dram_kbytes_accessed = extract_dram_usage(post_quant_df)
+
+    act_quant_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('activation quantization')]
+    act_quant_double_precision_count, act_quant_single_precision_count, act_quant_half_precision_count, act_quant_tensor_count = extract_flops(act_quant_df)
+    act_quant_flop_count = act_quant_double_precision_count +  act_quant_single_precision_count +  act_quant_half_precision_count +  act_quant_tensor_count
+    act_quant_run_time_us = extract_run_time(act_quant_df)
+    act_quant_dram_kbytes_accessed = extract_dram_usage(act_quant_df)
+
+    nvtx_col = "thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"
+    other_regions = ['activation quantization', 'post quantization processing', 'unpack weights', 'ternary matmul']
+    pattern = '|'.join(other_regions)
+    bitnet_atten_df = df[df[nvtx_col].str.contains('BitNetAttention') & ~df[nvtx_col].str.contains(pattern, case=False, na=False)]
+    for index, row in bitnet_atten_df.iterrows():
+        print(index, row)
+    bitnet_atten_double_precision_count, bitnet_atten_single_precision_count, bitnet_atten_half_precision_count, bitnet_atten_tensor_count = extract_flops(bitnet_atten_df)
+    bitnet_atten_flop_count = bitnet_atten_double_precision_count +  bitnet_atten_single_precision_count +  bitnet_atten_half_precision_count +  bitnet_atten_tensor_count
+    bitnet_atten_run_time_us = extract_run_time(bitnet_atten_df)
+    bitnet_atten_dram_kbytes_accessed = extract_dram_usage(bitnet_atten_df)
+    
+
+    # prefill_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')]
+    # prefill_double_precision_count, prefill_single_precision_count, prefill_half_precision_count, prefill_tensor_count = extract_flops(prefill_df)
+    # prefill_flop_count = prefill_double_precision_count +  prefill_single_precision_count +  prefill_half_precision_count +  prefill_tensor_count
+    # prefill_run_time_us = extract_run_time(prefill_df)
+    # prefill_dram_kbytes_accessed = extract_dram_usage(prefill_df)
+
+    # decode_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decode')]
+    # decode_double_precision_count, decode_single_precision_count, decode_half_precision_count, decode_tensor_count = extract_flops(decode_df)
+    # decode_flop_count = decode_double_precision_count +  decode_single_precision_count +  decode_half_precision_count +  decode_tensor_count
+    # decode_run_time_us = extract_run_time(decode_df)
+    # decode_dram_kbytes_accessed = extract_dram_usage(decode_df)
 
 
-    with open(f"outputs/txt/additional_workload_info{curr_date}.txt", "a") as f:
+    with open(f"outputs/txt/additional_workload_info_{workload_str}.txt", "w") as f:
         f.write(f"{workload_str}\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{int(double_precision_count):,d} 64 bit floating point operations\n")
@@ -331,17 +472,48 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitMLP\n")
+        f.write(f"{(linear_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Linear\n")
+        f.write(f"{(unpack_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Post Quantization\n")
+        f.write(f"{(act_quant_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Activation Quantization\n")
+        f.write(f"{(bitnet_atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with bitnet attention\n")
         f.write(f"==============================================================================================\n")
-        f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
-        f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
-        f.write(f"{(atten_half_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations\n")
-        f.write(f"{(atten_tensor_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations\n")
+        f.write(f"{(atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitAttentionForward\n")
+        f.write(f"{(mlp_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitMLP\n")
+        f.write(f"{(linear_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Linear\n")
+        f.write(f"{(unpack_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Post Quntization\n")
+        f.write(f"{(act_quant_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Activation Quntization\n")
+        f.write(f"{(bitnet_atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with attention\n")
         f.write(f"==============================================================================================\n")
-        f.write(f"{(mlp_double_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 64 bit floating point operations\n")
-        f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
-        f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
-        f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
-
+        f.write(f"{(atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with HGRNBitAttentionForward\n")
+        f.write(f"{(mlp_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with  HGRNBitMLP\n")
+        f.write(f"{(linear_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Linear\n")
+        f.write(f"{(unpack_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Post Quantization\n")
+        f.write(f"{(act_quant_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with activation Quantization\n")
+        f.write(f"{(bitnet_atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with other attention\n")
+        f.write(f"==============================================================================================\n")
+        if atten_flop_count != 0: 
+            f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
+            f.write(f"{(atten_single_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations\n")
+            f.write(f"{(atten_half_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations\n")
+            f.write(f"{(atten_tensor_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations\n")
+            f.write(f"==============================================================================================\n")
+        if mlp_flop_count != 0: 
+            f.write(f"{(mlp_double_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 64 bit floating point operations\n")
+            f.write(f"{(mlp_single_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 32 bit floating point operations\n")
+            f.write(f"{(mlp_half_precision_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are 16 bit floating point operations\n")
+            f.write(f"{(mlp_tensor_count/mlp_flop_count)*100}% of the FLOPs in HGRNBitMLP are tensor floating point operations\n")
+            f.write(f"==============================================================================================\n")
+        f.write(f"{(linear_double_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 64 bit floating point operations\n")
+        f.write(f"{(linear_single_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 32 bit floating point operations\n")
+        f.write(f"{(linear_half_precision_count/linear_flop_count)*100}% of the FLOPs in Linear are 16 bit floating point operations\n")
+        f.write(f"{(linear_tensor_count/linear_flop_count)*100}% of the FLOPs in Linear are tensor floating point operations\n")
+        f.write(f"==============================================================================================\n")
+        f.write(f"{(scalar_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with scalar overhead\n")
+        f.write(f"{(scalar_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with scalar overhead\n")
+        f.write(f"{(scalar_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with scalar overhead\n")
     # fraction of 
 
 def get_continous_group_of_kernals(df, condition, index):
@@ -355,85 +527,27 @@ def log_full_df(df):
     with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
         logger.info(df)
 
-def parse_data_from_ncu_files(data):
-    dram_kernel_count = 0 
-    total_kilo_bytes = 0
-    double_precision_count = 0 
-    single_precision_count = 0 
-    half_precision_count = 0 
-    tensor_count = 0
-    run_time_us = 0
-    flop_metrics = double_precision_metrics + single_precision_metrics + half_precision_metrics + tensor_core_metrics
-    for line in data: 
-        if "dram__bytes.sum" in line:
-            words = line.split()
-            value = float(words[2])
-            if('Mbyte' in line):
-                value *= 1000
-            if('Gbyte' in line):
-                value *= 1e6
-            if("Kbyte" not in line and 'Mbyte' not in line and 'Gbyte' not in line):
-                logger.error(f"warning non standard value found in line{line}")
-                exit()
-            total_kilo_bytes += value
-        elif any(metric in line for metric in flop_metrics):
-            words = line.split()
-            value = int(words[2].replace("," , ""))
-            if any(metric in line for metric in double_precision_metrics):
-                double_precision_count += value
-            elif any(metric in line for metric in single_precision_metrics):
-                single_precision_count += value
-            elif any(metric in line for metric in half_precision_metrics):
-                half_precision_count += value
-            elif any(metric in line for metric in tensor_core_metrics):
-                tensor_count += value
-        elif "gpu__time_duration.sum" in line:
-            value = float(words[2])
-            if('ms' == words[1]):
-                value *= 1e3
-            if("us" not in line and 'ms' not in line):
-                logger.error(f"warning non standard value time value in line: {line}")
-                exit()
-            run_time_us += value
-    return total_kilo_bytes, double_precision_count, single_precision_count, half_precision_count, tensor_count, run_time_us
-
-# def get_data(bs, new_tokens, seq_len):
-#     row = {}
-#     row['Model Name'] = 'ridger/MMfreeLM-2.7B'
-#     row['Batch Size'] = bs
-#     row['Tokens Generated'] = new_tokens 
-#     row['Input Sequence Length'] = seq_len
-#     data = get_ncu_data(bs, new_tokens, seq_len)
-#     row["GigaBytes Accessed"] = data["KiloBytes Accessed"] / 1e6
-#     row["Double Precision FLOPs"] = data["Double Precision FLOPs"]
-#     row["Single Precision FLOPs"] = data["Single Precision FLOPs"]
-#     row["Half Precision FLOPs"] = data["Half Precision FLOPs"]
-#     row["Tensor FLOPs"] = data["Tensor FLOPs"] 
-#     row["(NCU) Total GFLOPs"] = data["(NCU) Total FLOPs"] / 1e9
-#     row["Run Time (s)"] = data["Run Time (s)"]
-#     # row['(PyTorch) Total GFLOPs'] = get_flops(bs, new_tokens, seq_len) /1e9
-#     row['Compute Intensity (NCU)'] = row["(NCU) Total GFLOPs"] / row['GigaBytes Accessed']
-#     row["GFLOP/s"] = row["(NCU) Total GFLOPs"] / row["Run Time (s)"]
-#     # row['Compute Intensity (PyTorch)'] = row["(PyTorch) Total GFLOPs"] / row['GigaBytes Accessed']
-#     print(row)
-#     return row
 
 def main():
     logger.info("Extracting Roofline Data")
     from datetime import datetime
-    filename =  'outputs/csvs/roofline_data.csv'
+    filename = f'outputs/csvs/roofline_data{curr_date_time}.csv'
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
+    if(max_new_tokens < 2):
+        print("generating less than 2 tokens will cause errors")
+        exit()
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
+    model_name = args.model_name
     first_row = True
     start = time.perf_counter()
     threads = []
     with open(filename, 'w') as csvfile:
-        for batch_power in range(min_batch_power, max_batch_power+1):
+        for batch_power in reversed(range(min_batch_power, max_batch_power+1)):
             batch_size = 2**batch_power
-            run_ncu_profile(batch_size, max_new_tokens, sequence_length)
-            thread = CustomThread(target=extract_data_from_ncu_files_via_csv, args=(batch_size, max_new_tokens, sequence_length))
+            run_ncu_profile(batch_size, max_new_tokens, sequence_length, model_name=model_name)
+            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length, model_name))
             threads.append(thread)
             thread.start()
         for thread in threads:

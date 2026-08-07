@@ -1,16 +1,38 @@
+# Example run: 
+# python quiet_run.py -b 5 -s 10 -n 10 -i 1 
+# Example Bitnet Run: 
+# python quiet_run.py -b 5 -s 10 -n 10 -i 1 --model_name microsoft/bitnet-b1.58-2B-4T --prefill_decode
+
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-import time
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids
-import transformers
+from transformers import AutoModelForCausalLM, logging
+from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
 import argparse
-import statistics
-from zeus.monitor import ZeusMonitor, PowerMonitor
-import csv
 import nvtx
+import transformers.integrations.bitnet as bitnet
+import bitnet as local_bitnet
+import random
+import numpy as np
+import gc 
+from scaled_mmfree import print_system_ram
+
+bitnet.pack_weights = local_bitnet.pack_weights
+bitnet.unpack_weights = local_bitnet.unpack_weights
+bitnet.BitLinear = local_bitnet.BitLinear
+bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
+bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
+
+seed = 42
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+random.seed(seed)
+np.random.seed(seed)
+
+# Force cuDNN determinism
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"
@@ -30,6 +52,12 @@ parser.add_argument(
     help="changes the model to using the original implementation"
 )
 
+parser.add_argument(
+    "--use_dataset_prompts",
+    action='store_true',
+    default=False,
+    help="changes whether we are using random prompts or dataset prompts"
+)
 
 parser.add_argument(
     "-s",
@@ -58,17 +86,16 @@ parser.add_argument(
     help="sets the model name to be used"
 )
 
+parser.add_argument(
+    "--prefill_decode",
+    action='store_true',
+    default=False,
+    help="sets whether we mark prefill and decode sections of the workload"
+)
+
+print("quiet run is running")
 args = parser.parse_args()
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
 
-logging.set_verbosity_error()
-logging.disable_default_handler()
-logging.disable_propagation()
-
-# 2. Suppress HuggingFace Hub logging (where shard-loading prints originate)
 logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
@@ -78,15 +105,36 @@ num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
+prefill_decode = args.prefill_decode
 
-batch = generate_random_input_ids(model_name, batch_size, seq_len)
+if(args.use_original):
+    import mmfreelm_original
+else:
+    import mmfreelm
+batch = None
+
+MODEL_ID = None
+if model_name == "scaled_mmfree":
+    MODEL_ID = "ridger/MMfreeLM-2.7B"
+else: 
+    MODEL_ID = model_name
+
+if args.use_dataset_prompts:
+    batch = generate_dataset_input_ids(MODEL_ID, batch_size, seq_len)
+else: 
+    batch = generate_random_input_ids(MODEL_ID, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
 
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-
-
+model = None
+print("attempting to load model")
+if "ridger" in model_name:
+    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+else: 
+    model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+print("loaded model")
+print("warmup running")
+add_nvtx_hooks_to_every_module(model)
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
     _ = model.generate(
@@ -96,17 +144,35 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
+print_system_ram("After Models Loaded")
+gc.collect()
+torch.cuda.synchronize()
 print("warmup finished")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
-    for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
-
+    if prefill_decode:
+        with nvtx.annotate("prefill", color="red"):
+            with torch.no_grad():
+                out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+        with nvtx.annotate("switching between pre and deco", color="green"):
+            past = out.past_key_values
+            next_tok = out.logits[:, -1:, :].argmax(-1)
+            print("switching now")
+        with nvtx.annotate("decode", color="blue"):
+            with torch.no_grad():
+                for i in range(max_new_tokens-1):
+                    with nvtx.annotate(f"decodingStep{i}", color="cyan"):
+                        out = model(input_ids=next_tok, past_key_values=past,
+                                    use_cache=True, return_dict=True)
+                        past = out.past_key_values
+                        next_tok = out.logits[:, -1:, :].argmax(-1)
+    else: 
+        for _ in range(num_iterations):
+            model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    min_new_tokens=max_new_tokens,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False
+                )
 print("inference worked")
