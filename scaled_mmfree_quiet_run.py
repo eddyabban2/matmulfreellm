@@ -13,7 +13,7 @@ import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from scaled_mmfree import create_scaled_mmfree
+from scaled_mmfree import create_scaled_mmfree, print_system_ram
 
 seed = 42
 torch.manual_seed(seed)
@@ -100,12 +100,12 @@ weight_multiplier=3.9375
 vocab_size_multiplier=4
 weight_compression=True
 model_id="ridger/MMfreeLM-2.7B"
-print_model_config=False
+print_model_config=True
 device="cuda"
 print("attempting to load model")
 model = create_scaled_mmfree(
     layers_multiplier=layers_multiplier,
-    weight_multiplier=weight_compression, 
+    weight_multiplier=weight_multiplier, 
     vocab_size_multiplier=vocab_size_multiplier, 
     weight_compression=weight_compression, 
     model_id=model_id, 
@@ -119,15 +119,13 @@ with nvtx.annotate("warmup", color="white"):
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=1,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
+        max_new_tokens=1)
 torch.cuda.synchronize()
 gc.collect()
 torch.cuda.synchronize()
 torch.use_deterministic_algorithms(True, warn_only=True)
 print("warmup finished")
+print_system_ram("Memory After Warmup")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
     if prefill_decode:

@@ -32,6 +32,7 @@ def create_scaled_mmfree(
     if weight_multiplier != 1 or vocab_size_multiplier != 1: 
         hidden_size = int(2560*weight_multiplier)
         vocab_size = int(full_model.vocab_size*vocab_size_multiplier)
+        del full_model.model.embeddings
         embeddings = nn.Embedding(
             num_embeddings=vocab_size, 
             embedding_dim=hidden_size, 
@@ -47,7 +48,7 @@ def create_scaled_mmfree(
         full_model.model.norm.increase_size(weight_multiplier)
         full_model.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compressed_type=weight_compression)
     if print_model_config:
-            print_system_ram("System RAM After updating lm head and norm")
+        print_system_ram("System RAM After updating lm head and norm")
     layer_count = int(layers_multiplier * full_model.config.num_hidden_layers)
     new_hidden_size = int(2560*weight_multiplier)
     model_layers = []
@@ -58,16 +59,18 @@ def create_scaled_mmfree(
         for _ in range(layer_count):
             random_layer_index = random.randint(0, full_model.config.num_hidden_layers-1)
             model_layers.append(copy.deepcopy(full_model.model.layers[random_layer_index]))
-
+    del full_model.model.layers
+    print_system_ram(f"after deleting the original alyers")
     local_layers = nn.ModuleList(model_layers)
-    local_layers = local_layers.to(device)
+    local_layers = local_layers.to("cpu")
     full_model.model.lower_bounds = nn.Parameter(torch.rand(layer_count, new_hidden_size).to(device))
 
+    if print_model_config:
+        print(f"iterating over {len(local_layers)} layers")
+
     # if weight_multiplier != 1:
-    for layer in local_layers:
+    for idx,layer in enumerate(local_layers):
         layer = layer.to(device)
-        if print_model_config:
-            print_system_ram("increasing size")
         layer.attn.i_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
         layer.attn.f_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
         layer.attn.g_proj.increase_size(weight_multiplier, weight_multiplier, compressed_type=weight_compression)
@@ -77,6 +80,8 @@ def create_scaled_mmfree(
         layer.attn_norm.increase_size(weight_multiplier)
         layer.mlp_norm.increase_size(weight_multiplier)
         layer.attn.g_norm.increase_size(weight_multiplier)
+        if print_model_config:
+            print_system_ram(f"increasing size {idx}")
 
     if print_model_config:
         print_system_ram("System RAM After loading layers")
@@ -86,11 +91,19 @@ def create_scaled_mmfree(
     full_model.config.num_hidden_layers = len(local_layers)
     if vocab_size_multiplier != 1:
         full_model.config.vocab_size = int(full_model.config.vocab_size * vocab_size_multiplier)
-    full_model.to(device)
     full_model.model.embeddings.to(device)
     full_model.model.layers.to(device)
     full_model.model.norm.to(device)
     full_model.lm_head.to(device)
+    full_model = full_model.to(device)
+
+    if hasattr(full_model, "generation_config"):
+        full_model.generation_config.vocab_size = full_model.config.vocab_size
+    if weight_multiplier != 1:
+        full_model.config.hidden_size = new_hidden_size 
+        
+        if hasattr(full_model.config, "d_model"):
+            full_model.config.d_model = new_hidden_size
 
     if print_model_config: 
         print(f"Embedding Layer: {full_model.model.embeddings}")
@@ -110,11 +123,14 @@ def print_system_ram(label):
 def main():
 
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 1
-    weight_multiplier = 1
-    vocab_size_multiplier = 1
+    # layers_multiplier = 1
+    # weight_multiplier = 1
+    # vocab_size_multiplier = 1
+    layers_multiplier=2.5
+    weight_multiplier=3.9375
+    vocab_size_multiplier=4
     print_model_config = True
-    use_weight_compression = False
+    use_weight_compression = True
     print_system_ram("System RAM Before Loading")
     model = create_scaled_mmfree(
         layers_multiplier=layers_multiplier, 
