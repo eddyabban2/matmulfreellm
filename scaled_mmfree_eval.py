@@ -13,7 +13,7 @@ import gc
 from transformers import logging
 import argparse
 import csv
-from scaled_mmfree import create_scaled_mmfree
+from scaled_mmfree import create_scaled_model_from_config
 from generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup, get_power_data
 
 parser = argparse.ArgumentParser(
@@ -30,21 +30,21 @@ parser.add_argument(
 parser.add_argument(
     "-w", 
     "--weight_multiplier",
-    default=0.5,
+    default=1,
     help="sets the number of we multiply the number of weights in each layer by"
 )
 
 parser.add_argument(
     "-l", 
     "--layers_multiplier",
-    default=0.5,
+    default=1,
     help="sets the number  we multiply the number of layers by"
 )
 
 parser.add_argument(
     "-v", 
     "--vocab_multiplier",
-    default=2,
+    default=1,
     help="sets the number  we multiply the number of layers by"
 )
 
@@ -70,7 +70,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_batch_power", 
-    default=1,
+    default=3,
     help="stores the maximum batch power to go up to when profiling",
 )
 
@@ -139,7 +139,7 @@ def create_csv_data(
             }
         for weight_compression in weight_compression_settings:
             print(f"\tCollecting data for scaled mmfree with compression status {weight_compression}")
-            model = create_scaled_mmfree(
+            model = create_scaled_model_from_config(
                 layers_multiplier=layers_multiplier, 
                 weight_multiplier=weight_multiplier, 
                 vocab_size_multiplier=vocab_multiplier, 

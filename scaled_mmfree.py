@@ -118,10 +118,9 @@ def create_scaled_model_from_config(
         weight_multiplier=1, 
         vocab_size_multiplier=1, 
         weight_compression=False, 
-        model_id="ridger/MMfreeLM-2.7B", 
         print_model_config=False, 
         device="cuda"):
-    compression_type = CompressedType.NAIVE if weight_compression else CompressedType.NAIVE
+    compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
     
     config = HGRNBitConfig(
         vocab_size = int(32000*vocab_size_multiplier),
@@ -152,16 +151,20 @@ def create_scaled_model_from_config(
     model = HGRNBitForCausalLM(config).half()
     if print_model_config:
         print_system_ram("After Loading model model uncompressed")
-    if weight_compression:
-        for idx, layer in enumerate(model.model.layers): 
-            layer.set_compression(CompressedType.NAIVE, device="cuda")
-            if print_model_config:
-                print_system_ram(f"After compressing layer: {idx}")
-        gc.collect()
-        torch.cuda.empty_cache()
+    for idx, layer in enumerate(model.model.layers): 
+        layer.set_compression(compression_type, device=device)
         if print_model_config:
-            print_system_ram("After compressing model")
-    model = model.to("cuda")
+            print_system_ram(f"After compressing layer: {idx}")
+    gc.collect()
+    torch.cuda.empty_cache()
+    if print_model_config:
+        print_system_ram("After compressing model")
+    model = model.to(device)
+    model.model.embeddings.to(device)
+    model.model.layers.to(device)
+    model.model.norm.to(device)
+    model.model = model.model.to(device)
+    model.lm_head.to(device)
     gc.collect()
     torch.cuda.empty_cache()
     return model
@@ -182,7 +185,7 @@ def main():
     weight_multiplier=1
     vocab_size_multiplier=1
     print_model_config = True
-    use_weight_compression = True
+    use_weight_compression = False
     print_system_ram("System RAM Before Loading")
     model = create_scaled_model_from_config(
         layers_multiplier=layers_multiplier, 
