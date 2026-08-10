@@ -678,6 +678,10 @@ class FusedBitLinear(BitLinear):
         self.convert_weights(device=device)
 
     def convert_weights(self, device=None):
+        if(self.compressed_weights == None and self.cached_weights == None):
+            self.cached_weights = weight_quant(self.weight)
+            self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
+            del self.weight
         match self.compressed_type:
             case CompressedType.NAIVE:
                 if device == None:

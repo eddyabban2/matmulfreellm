@@ -112,6 +112,61 @@ def create_scaled_mmfree(
         print(f"norm: {full_model.model.norm}")
         print(f"lm_head: {full_model.lm_head}")
     return full_model
+
+def create_scaled_model_from_config(
+        layers_multiplier=1, 
+        weight_multiplier=1, 
+        vocab_size_multiplier=1, 
+        weight_compression=False, 
+        model_id="ridger/MMfreeLM-2.7B", 
+        print_model_config=False, 
+        device="cuda"):
+    compression_type = CompressedType.NAIVE if weight_compression else CompressedType.NAIVE
+    
+    config = HGRNBitConfig(
+        vocab_size = int(32000*vocab_size_multiplier),
+        hidden_size = int(2560*weight_multiplier),
+        num_hidden_layers = int(32*layers_multiplier),
+        attn_mode = "fused_recurrent",
+        num_heads = 1,
+        expand_ratio = 1,
+        use_short_conv = False,
+        conv_size = 4,
+        share_conv_kernel = True,
+        use_lower_bound = True,
+        hidden_ratio = 1,
+        intermediate_size = int(6912*weight_multiplier),
+        hidden_act = "swish",
+        max_position_embeddings = 2048,
+        rms_norm_eps = 1e-6,
+        use_cache = True,
+        pad_token_id = None,
+        bos_token_id = 1,
+        eos_token_id = 2,
+        tie_word_embeddings = False,
+        initializer_range = 0.02,
+        fuse_cross_entropy = True, 
+        model_type = "hgrn_bit", 
+        compressed_type=compression_type
+    )
+    model = HGRNBitForCausalLM(config).half()
+    if print_model_config:
+        print_system_ram("After Loading model model uncompressed")
+    if weight_compression:
+        for idx, layer in enumerate(model.model.layers): 
+            layer.set_compression(CompressedType.NAIVE, device="cuda")
+            if print_model_config:
+                print_system_ram(f"After compressing layer: {idx}")
+        gc.collect()
+        torch.cuda.empty_cache()
+        if print_model_config:
+            print_system_ram("After compressing model")
+    model = model.to("cuda")
+    gc.collect()
+    torch.cuda.empty_cache()
+    return model
+    
+
 process = psutil.Process(os.getpid())
 def print_system_ram(label):
     mem_bytes = process.memory_info().rss 
@@ -123,16 +178,13 @@ def print_system_ram(label):
 def main():
 
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    # layers_multiplier = 1
-    # weight_multiplier = 1
-    # vocab_size_multiplier = 1
-    layers_multiplier=2.5
-    weight_multiplier=3.9375
-    vocab_size_multiplier=4
+    layers_multiplier=1
+    weight_multiplier=1
+    vocab_size_multiplier=1
     print_model_config = True
     use_weight_compression = True
     print_system_ram("System RAM Before Loading")
-    model = create_scaled_mmfree(
+    model = create_scaled_model_from_config(
         layers_multiplier=layers_multiplier, 
         weight_multiplier=weight_multiplier, 
         vocab_size_multiplier=vocab_size_multiplier, 
@@ -140,10 +192,15 @@ def main():
         print_model_config=print_model_config, 
         weight_compression=use_weight_compression
     )
+    # model = create_scaled_mmfree(
+    #     layers_multiplier=layers_multiplier, 
+    #     weight_multiplier=weight_multiplier, 
+    #     vocab_size_multiplier=vocab_size_multiplier, 
+    #     model_id=MODEL_ID, 
+    #     print_model_config=print_model_config, 
+    #     weight_compression=use_weight_compression
+    # )
     print_system_ram("System RAM After Loading Model")
-
-    base_memory_bytes = torch.cuda.memory_allocated()
-    print(f"GPU Memory (Model Loading): {base_memory_bytes / (1024 ** 3):.2f} GB")
 
     batch_size = 5
     sequence_length = 20
@@ -163,6 +220,20 @@ def main():
     )
 
     print_system_ram("System RAM After Generation")
+
+    with torch.no_grad():
+        out = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True, return_dict=True)
+
+    past = out.past_key_values
+    next_tok = out.logits[:, -1:, :].argmax(-1)
+    with torch.no_grad():
+        for i in range(max_new_tokens-1):
+            out = model(input_ids=next_tok, past_key_values=past,
+                        use_cache=True, return_dict=True)
+            past = out.past_key_values
+            next_tok = out.logits[:, -1:, :].argmax(-1)
+
+    print_system_ram("System RAM After Running Seperated Prefill and Decode")
 
 if __name__ == "__main__":
     main()
