@@ -19,6 +19,7 @@ import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
 import transformers.integrations.bitnet as bitnet
+from scaled_mmfree import print_system_ram
 
 import bitnet as local_bitnet
 import mmfreelm
@@ -328,8 +329,9 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     row['joules_per_token'] = row['energy_per_iteration_joules'] / (batch_size * max_new_tokens)
 
 def set_ridger_compression(compression, model):
-    for layer in model.model.layers: 
-        layer.set_compression(compression)
+    for idx,layer in enumerate(model.model.layers): 
+        layer.set_compression(compression, device="cuda")
+        print_system_ram(f"After compressing layer {idx}: ")
 def set_bitnet_compression(compression, model):
     compression = (compression == CompressedType.NAIVE) 
     for layer in model.model.layers:
@@ -356,9 +358,14 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         print(f"Collecting data for model: {model_name}")
         compressionType = [CompressedType.FLOAT16, CompressedType.NAIVE]
         for packed in compressionType:
+            print(f"Collecting data for compression type: {packed}")
+            print_system_ram(f"Before loading model")
             model = AutoModelForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True).cuda()
+            print(f"model name: {model_name}")
             if 'ridger' in model_name:
                 model = model.half()
+                print_system_ram("After initalizing model")
+                print("model name contains ridger")
                 set_ridger_compression(packed, model)
             if 'bitnet' in model_name: 
                 set_bitnet_compression(packed, model)
@@ -422,7 +429,7 @@ if __name__ == "__main__":
 
     parser.add_argument( 
         "--max_new_tokens",
-        default=2,
+        default=32,
         help="sets the sequence length of input tokens"
     )
 
@@ -448,7 +455,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--max_batch_power", 
-        default=1,
+        default=2,
         help="stores the maximum batch power to go up to when profiling",
     )
 

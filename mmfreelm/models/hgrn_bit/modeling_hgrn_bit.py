@@ -89,7 +89,7 @@ class HGRNBitBlock(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act
         )
-    def set_compression(self, compression, device=None):
+    def set_compression(self, compression, device=None, convert_weights=False):
         self.attn.i_proj.compressed_type = compression
         self.attn.f_proj.compressed_type = compression
         self.attn.g_proj.compressed_type = compression
@@ -97,14 +97,14 @@ class HGRNBitBlock(nn.Module):
 
         self.mlp.gate_proj.compressed_type = compression
         self.mlp.down_proj.compressed_type = compression
+        if convert_weights:
+            self.attn.i_proj.convert_weights(device=device)
+            self.attn.f_proj.convert_weights(device=device)
+            self.attn.g_proj.convert_weights(device=device)
+            self.attn.o_proj.convert_weights(device=device)
 
-        self.attn.i_proj.convert_weights(device=device)
-        self.attn.f_proj.convert_weights(device=device)
-        self.attn.g_proj.convert_weights(device=device)
-        self.attn.o_proj.convert_weights(device=device)
-
-        self.mlp.gate_proj.convert_weights(device=device)
-        self.mlp.down_proj.convert_weights(device=device)
+            self.mlp.gate_proj.convert_weights(device=device)
+            self.mlp.down_proj.convert_weights(device=device)
 
     def forward(
         self,

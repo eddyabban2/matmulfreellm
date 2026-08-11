@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "-s", 
     "--sequence_length",
-    default=5,
+    default=32,
     help="sets the sequence length of input tokens"
 )
 
@@ -50,14 +50,14 @@ parser.add_argument(
 
 parser.add_argument( 
     "--max_new_tokens",
-    default=20,
+    default=32,
     help="sets the sequence length of input tokens"
 )
 
 parser.add_argument(
     "-i", 
     "--iterations",
-    default=1,
+    default=5,
     help="Determines the number of iterations to benchmark for"
 )
 
@@ -70,7 +70,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_batch_power", 
-    default=3,
+    default=2,
     help="stores the maximum batch power to go up to when profiling",
 )
 
