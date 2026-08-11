@@ -24,7 +24,7 @@ import mmfreelm  # noqa: F401
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from tensorrt_generation import CUDAGraphAccelerator, ONNXTRTAccelerator, trt_dependencies_available
+from mmfreelm.tensorrt import CUDAGraphAccelerator, ONNXTRTAccelerator, trt_dependencies_available
 
 DEFAULT_MODEL = "ridger/MMfreeLM-370M"
 

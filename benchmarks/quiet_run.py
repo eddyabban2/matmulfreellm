@@ -7,11 +7,11 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
 from transformers import AutoModelForCausalLM, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
+from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids
 import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
-import bitnet as local_bitnet
+from mmfreelm.integrations import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 

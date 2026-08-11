@@ -12,7 +12,7 @@ from datetime import timedelta
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import random
 import gc 
-from utils import generate_dataset_input_ids, create_string_from_tokens
+from mmfreelm.benchmark.utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
 os.environ["OMP_NUM_THREADS"] = "2"

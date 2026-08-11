@@ -14,9 +14,8 @@ import datetime
 import metrics_helper
 
 from pathlib import Path
-sys.path.append('..')
 import logging
-from utils import CustomThread
+from mmfreelm.benchmark.utils import CustomThread
 curr_date=datetime.datetime.today().strftime('%m-%d-%Y')
 curr_date_time= datetime.datetime.now().strftime("%B %d, %Y at %I:%M%p")
 logger = logging.getLogger(__name__)

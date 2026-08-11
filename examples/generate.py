@@ -262,7 +262,7 @@ def main():
         model.config.use_cache = False
 
     if args.tensorrt:
-        from tensorrt_generation import ONNXTRTAccelerator, trt_dependencies_available
+        from mmfreelm.tensorrt import ONNXTRTAccelerator, trt_dependencies_available
 
         if not trt_dependencies_available():
             print(

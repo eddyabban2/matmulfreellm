@@ -7,8 +7,8 @@ import torch.distributed as dist
 import argparse
 import nvtx
 from transformers import logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
-from pipeline_mmfreelm import PipelineParallelMatMulFreeLM
+from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids
+from benchmarks.pipeline_mmfreelm import PipelineParallelMatMulFreeLM
 
 parser = argparse.ArgumentParser(
     description="performs Batched Generation"

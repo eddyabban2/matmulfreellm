@@ -6,7 +6,7 @@ memory-heavy. Use this script to produce an ONNX file, copy it to a workstation,
 then build with trtexec or TensorRT Python API.
 
 Example:
-  PYTHONPATH=. python3 scripts/export_onnx_for_trt.py \\
+  mmfreelm-export-onnx \\
       --model ridger/MMfreeLM-370M \\
       --out /tmp/mmfreelm_370m.onnx
 
@@ -31,7 +31,7 @@ import torch
 import mmfreelm  # noqa: F401
 from transformers import AutoModelForCausalLM
 
-from tensorrt_generation import ModelForwardWrapper, patch_all_triton_ops
+from mmfreelm.tensorrt import ModelForwardWrapper, patch_all_triton_ops
 
 
 def export_onnx(model_name: str, out_path: str, fp32: bool = False) -> None:

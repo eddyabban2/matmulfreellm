@@ -2,7 +2,6 @@ import subprocess
 import argparse
 import sys
 import os
-sys.path.append('..')
 
 parser = argparse.ArgumentParser(
     description="runs Nvidia Nsight Systems on a generate"

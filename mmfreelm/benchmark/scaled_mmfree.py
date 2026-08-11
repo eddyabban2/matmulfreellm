@@ -4,7 +4,11 @@ import copy
 import sys
 import random
 import gc 
-from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
+from mmfreelm.benchmark.utils import (
+    create_string_from_tokens,
+    generate_dataset_input_ids,
+    generate_random_input_ids,
+)
 from transformers import AutoModelForCausalLM
 
 def create_scaled_mmfree(

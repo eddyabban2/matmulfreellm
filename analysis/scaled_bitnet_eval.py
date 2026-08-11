@@ -16,9 +16,9 @@ from transformers import logging
 import argparse
 import csv
 import transformers.integrations.bitnet as bitnet
-import bitnet as local_bitnet
-from scaled_bitnet import create_custom_bitnet, standard_model_config
-from generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
+from mmfreelm.integrations import bitnet as local_bitnet
+from mmfreelm.benchmark.scaled_bitnet import create_custom_bitnet, standard_model_config
+from analysis.generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights

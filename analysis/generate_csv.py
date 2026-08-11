@@ -13,7 +13,7 @@ import torch
 import gc
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids
+from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
 import argparse
 import statistics
@@ -21,7 +21,7 @@ from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import transformers.integrations.bitnet as bitnet
-import bitnet as local_bitnet
+from mmfreelm.integrations import bitnet as local_bitnet
 import mmfreelm
 
 bitnet.pack_weights = local_bitnet.pack_weights

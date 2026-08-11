@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 import mmfreelm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from utils import generate_random_input_ids
+from mmfreelm.benchmark.utils import generate_random_input_ids
 
 def main():
     # Original implementation

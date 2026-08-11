@@ -3,7 +3,7 @@ import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import generate_random_input_ids, generate_dataset_input_ids, get_free_gpu
+from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids, get_free_gpu
 import transformers
 import argparse
 import statistics

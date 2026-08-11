@@ -2,7 +2,7 @@ import torch
 from transformers import BitNetConfig, BitNetForCausalLM, AutoTokenizer
 import transformers.integrations.bitnet as bitnet
 from accelerate import infer_auto_device_map, dispatch_model
-import bitnet as local_bitnet
+from mmfreelm.integrations import bitnet as local_bitnet
 import nvtx
 import gc
 

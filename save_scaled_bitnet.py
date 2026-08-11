@@ -2,10 +2,10 @@ import torch
 from transformers import BitNetConfig, BitNetForCausalLM, AutoTokenizer
 import transformers.integrations.bitnet as bitnet
 from accelerate import infer_auto_device_map, dispatch_model
-import bitnet as local_bitnet
+from mmfreelm.integrations import bitnet as local_bitnet
 import nvtx
 import gc
-from scaled_bitnet import scaled_model_config
+from mmfreelm.benchmark.scaled_bitnet import scaled_model_config
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights

@@ -3,7 +3,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
-from utils import  generate_dataset_input_ids
+from mmfreelm.benchmark.utils import  generate_dataset_input_ids
 import argparse
 import statistics
 import csv

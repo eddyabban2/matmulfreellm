@@ -22,7 +22,7 @@ import mmfreelm  # noqa: F401
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from tensorrt_generation import (
+from mmfreelm.tensorrt import (
     CUDAGraphAccelerator,
     ONNXTRTAccelerator,
     trt_dependencies_available,

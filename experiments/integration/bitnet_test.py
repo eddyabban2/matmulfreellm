@@ -1,8 +1,8 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 import torch
-from utils import generate_dataset_input_ids
+from mmfreelm.benchmark.utils import generate_dataset_input_ids
 import transformers.integrations.bitnet as bitnet
-import bitnet as local_bitnet
+from mmfreelm.integrations import bitnet as local_bitnet
 import gc 
 
 logging.set_verbosity_error()

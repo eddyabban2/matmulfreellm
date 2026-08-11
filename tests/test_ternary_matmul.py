@@ -34,8 +34,8 @@ def test_onnx_export_contains_ternary_matmul_op():
     onnx = pytest.importorskip("onnx")
     from transformers import AutoModelForCausalLM
 
-    from tensorrt_generation import ModelForwardWrapper, patch_all_triton_ops
-    from tests.test_onnx_export import _export_onnx_for_test
+    from mmfreelm.tensorrt import ModelForwardWrapper, patch_all_triton_ops
+    from mmfreelm.onnx_export import export_onnx_for_test
 
     patched = patch_all_triton_ops(
         AutoModelForCausalLM.from_pretrained("ridger/MMfreeLM-370M").cuda().half().eval()
@@ -43,7 +43,7 @@ def test_onnx_export_contains_ternary_matmul_op():
     fwd = ModelForwardWrapper(patched)
     with tempfile.TemporaryDirectory() as d:
         path = f"{d}/model.onnx"
-        _export_onnx_for_test(fwd, path)
+        export_onnx_for_test(fwd, path)
         model = onnx.load(path)
     ops = [n for n in model.graph.node if n.op_type == ONNX_OP_NAME and n.domain == ONNX_DOMAIN]
     assert len(ops) >= 100, f"expected many TernaryMatMul nodes, got {len(ops)}"
@@ -62,7 +62,7 @@ def test_trt_build_with_ternary_matmul_plugin():
         pytest.skip("pycuda required for TRT build test")
 
     from transformers import AutoModelForCausalLM
-    from tensorrt_generation import ONNXTRTAccelerator
+    from mmfreelm.tensorrt import ONNXTRTAccelerator
 
     model = AutoModelForCausalLM.from_pretrained("ridger/MMfreeLM-370M").cuda().half().eval()
     with tempfile.TemporaryDirectory() as d:

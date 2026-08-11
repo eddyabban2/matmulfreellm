@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmfreelm"
+dynamic = ["version"]
+description = "Matmul-free language models (HGRN-Bit) with Jetson/TensorRT tooling"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "einops",
+    "ninja",
+    "torch",
+    "transformers",
+    "triton",
+]
+
+[project.optional-dependencies]
+bench = [
+    "accelerate",
+    "pandas",
+    "pynvml",
+    "zeus",
+]
+trt = [
+    "onnx",
+    "onnxruntime",
+    "pycuda",
+]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+mmfreelm-generate = "examples.generate:main"
+mmfreelm-export-onnx = "scripts.export_onnx_for_trt:main"
+mmfreelm-bench-trt = "benchmarks.benchmark_trt:main"
+mmfreelm-bench-power = "scripts.trt_power_benchmark:main"
+mmfreelm-bench-jetson-power = "scripts.jetson_power_modes_benchmark:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "mmfreelm.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mmfreelm*", "benchmarks*", "scripts*", "examples*", "analysis*"]
+exclude = ["mmfreelm_original*", "tests*", "experiments*", "distributed-matmulfreelm*"]
+
+[tool.setuptools.package-data]
+mmfreelm = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["experiments", "distributed-matmulfreellm", "mmfreelm_original"]

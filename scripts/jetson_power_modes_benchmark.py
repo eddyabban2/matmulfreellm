@@ -8,13 +8,13 @@ On Jetson Orin Nano Super, nvpmodel mode changes require a reboot. This script:
 
 Usage (after manually setting nvpmodel + rebooting):
   sudo nvpmodel -m 0 && sudo reboot   # 15W
-  PYTHONPATH=. python3 scripts/jetson_power_modes_benchmark.py --workloads all
+  mmfreelm-bench-jetson-power --workloads all
 
   sudo nvpmodel -m 1 && sudo reboot   # 25W
-  PYTHONPATH=. python3 scripts/jetson_power_modes_benchmark.py --workloads all
+  mmfreelm-bench-jetson-power --workloads all
 
   sudo nvpmodel -m 2 && sudo reboot   # MAXN_SUPER
-  PYTHONPATH=. python3 scripts/jetson_power_modes_benchmark.py --workloads all
+  mmfreelm-bench-jetson-power --workloads all
 """
 
 from __future__ import annotations
@@ -202,7 +202,7 @@ def workload_gpu_matmul(duration: float) -> Dict:
 def workload_llm_generate(duration: float, model_name: str, use_cudagraphs: bool) -> Dict:
     import mmfreelm  # noqa: F401
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from tensorrt_generation import CUDAGraphAccelerator
+    from mmfreelm.tensorrt import CUDAGraphAccelerator
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half().eval()

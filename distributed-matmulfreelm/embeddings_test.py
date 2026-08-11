@@ -8,7 +8,7 @@ import sys
 # from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.append('..')
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
-from utils import generate_dataset_input_ids, create_string_from_tokens
+from mmfreelm.benchmark.utils import generate_dataset_input_ids, create_string_from_tokens
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 

@@ -13,10 +13,9 @@ import csv
 import pandas as pd
 
 from pathlib import Path
-sys.path.append('..')
 import mmfreelm
 import logging
-from utils import CustomThread
+from mmfreelm.benchmark.utils import CustomThread
 
 logger = logging.getLogger(__name__)
 FORMAT = "[%(asctime)s] [%(levelname)s] %(filename)s:%(lineno)s - %(funcName)s ] %(message)s"

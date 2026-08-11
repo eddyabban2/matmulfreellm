@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from utils import generate_dataset_input_ids
+from mmfreelm.benchmark.utils import generate_dataset_input_ids
 import bitnet
 
 model_id = "tiiuae/Falcon-E-1B-Base"

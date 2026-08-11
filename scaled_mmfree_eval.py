@@ -14,8 +14,8 @@ import gc
 from transformers import logging
 import argparse
 import csv
-from scaled_mmfree import create_scaled_mmfree
-from generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
+from mmfreelm.benchmark.scaled_mmfree import create_scaled_mmfree
+from analysis.generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"

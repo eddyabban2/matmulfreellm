@@ -6,7 +6,7 @@ import torch
 import mmfreelm
 from matplotlib import pyplot as plt
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from utils import generate_random_input_ids
+from mmfreelm.benchmark.utils import generate_random_input_ids
 from mmfreelm.ops.fusedbitnet import FusedBitLinear
 
 def weight_quant(w):

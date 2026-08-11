@@ -16,8 +16,8 @@ import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
-from utils import generate_random_input_ids, generate_dataset_input_ids
-from pipeline_mmfreelm import PipelineParallelMatMulFreeLM
+from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids
+from benchmarks.pipeline_mmfreelm import PipelineParallelMatMulFreeLM
 import gc
 
 parser = argparse.ArgumentParser(
