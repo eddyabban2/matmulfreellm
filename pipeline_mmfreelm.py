@@ -24,7 +24,7 @@ import torch.multiprocessing as mp
 if __name__ == '__main__':
     mp.set_start_method('spawn')
 
-print_deadlocking_checks = False
+print_deadlocking_checks = True
 class PipelineParallelMatMulFreeLM:
     def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         if vocab_size_multiplier < 1:

@@ -12,14 +12,14 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import torch
 import gc
-from transformers import logging
+from transformers import logging, AutoModelForCausalLM
 import argparse
 import csv
 import transformers.integrations.bitnet as bitnet
 import bitnet as local_bitnet
-from scaled_bitnet import create_custom_bitnet, standard_model_config
+from scaled_bitnet import create_custom_bitnet, standard_model_config, scaled_model_config
 from generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup, get_power_data
-
+from scaled_mmfree import print_system_ram
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
 bitnet.BitLinear = local_bitnet.BitLinear
@@ -143,7 +143,32 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_config):
         csvwriter = None  
         row = {'Device': device, 'Model': "Scaled Up Bitnet"}
         print(f"Collecting data for model: {model_name}")
-        model = create_custom_bitnet(model_config=model_config)
+        model = AutoModelForCausalLM.from_config(scaled_model_config)
+        print_system_ram("initalized a temp model")
+
+        bitnet.replace_with_bitnet_linear(
+            model, 
+            quantization_config=scaled_model_config.quantization_config
+        )
+        print_system_ram("Quantizing Model")
+
+        # 3. Load your custom state dictionary from the local file
+        state_dict = torch.load('scaled_bitnet.pth', weights_only=False)
+        print_system_ram("Loaded model into state dic")
+
+        # 4. Apply the loaded weights to the model
+        model.load_state_dict(state_dict)
+        print_system_ram("Loaded weights into state dic")
+
+        # 5. Send the entire model to the GPU
+        model = model.to("cuda")
+        print_system_ram("Model moved to GPU")
+        total_params = sum(p.numel() for p in model.parameters())
+
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        model.total_params = total_params
+        model.trainable_params = trainable_params
         row['Total Parameters'] = f"{model.total_params:,}"
         row['Total Trainable Parameters'] = f"{model.trainable_params:,}"
         if args.print_model: 
