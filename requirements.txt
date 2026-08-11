@@ -5,9 +5,11 @@ nvtx
 packaging
 pandas
 setuptools
-torch==2.7.0
+torch
 transformers==4.46.0
 triton
 zeus
 pyarrow
 accelerate>=0.26.0
+seaborn
+awscli 

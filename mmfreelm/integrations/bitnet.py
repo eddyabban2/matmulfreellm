@@ -179,12 +179,13 @@ class BitLinear(nn.Module):
 
     def forward(self, input):
         with nvtx.annotate("BitLinear Forward", color="pink"):
-            if self.active_weights is None:
-                if self.compress_weights:
-                    self.active_weights = self.weight
-                else: 
-                    self.active_weights = unpack_weights(self.weight, dtype=self.dtype)
-                    del self.weight
+            with nvtx.annotate("Updating weights", color="orange"):
+                if self.active_weights is None:
+                    if self.compress_weights:
+                        self.active_weights = self.weight
+                    else: 
+                        self.active_weights = unpack_weights(self.weight, dtype=self.dtype)
+                        del self.weight
             
             with nvtx.annotate("activation quantization", color="orchid"):
                 input_quant, input_scale = self.activation_quant(input)

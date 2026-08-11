@@ -1,7 +1,5 @@
 # Example run: 
-# python quiet_run.py -b 5 -s 10 -n 10 -i 1 
-# Example Bitnet Run: 
-# python quiet_run.py -b 5 -s 10 -n 10 -i 1 --model_name microsoft/bitnet-b1.58-2B-4T --prefill_decode
+# python scaled_mmfree_quiet_run.py -b 5 -s 10 -n 10 -i 1
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -19,13 +17,7 @@ from mmfreelm.integrations import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from mmfreelm.benchmark.scaled_mmfree import print_system_ram
-
-bitnet.pack_weights = local_bitnet.pack_weights
-bitnet.unpack_weights = local_bitnet.unpack_weights
-bitnet.BitLinear = local_bitnet.BitLinear
-bitnet._replace_with_bitnet_linear = local_bitnet._replace_with_bitnet_linear
-bitnet.replace_with_bitnet_linear = local_bitnet.replace_with_bitnet_linear
+from mmfreelm.benchmark.scaled_mmfree import create_scaled_mmfree, print_system_ram
 
 seed = 42
 torch.manual_seed(seed)
@@ -47,13 +39,6 @@ parser.add_argument(
     "--batch_size",
     default=1,
     help="sets the batch size"
-)
-
-parser.add_argument(
-    "--use_original",
-    action='store_true',
-    default=False,
-    help="changes the model to using the original implementation"
 )
 
 parser.add_argument(
@@ -85,12 +70,6 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--model_name",
-    default='ridger/MMfreeLM-2.7B',
-    help="sets the model name to be used"
-)
-
-parser.add_argument(
     "--prefill_decode",
     action='store_true',
     default=False,
@@ -104,54 +83,53 @@ logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-model_name = args.model_name
+model_name = "ridger/MMfreeLM-2.7B"
 num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
 prefill_decode = args.prefill_decode
 
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
 batch = None
 
-MODEL_ID = None
-if model_name == "scaled_mmfree":
-    MODEL_ID = "ridger/MMfreeLM-2.7B"
-else: 
-    MODEL_ID = model_name
-
 if args.use_dataset_prompts:
-    batch = generate_dataset_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
 else: 
-    batch = generate_random_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
 
-model = None
+layers_multiplier=2.5
+weight_multiplier=3.9375
+vocab_size_multiplier=4
+weight_compression=True
+model_id="ridger/MMfreeLM-2.7B"
+print_model_config=True
+device="cuda"
 print("attempting to load model")
-if "ridger" in model_name:
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-else: 
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-print("loaded model")
-print("warmup running")
+model = create_scaled_mmfree(
+    layers_multiplier=layers_multiplier,
+    weight_multiplier=weight_multiplier, 
+    vocab_size_multiplier=vocab_size_multiplier, 
+    weight_compression=weight_compression, 
+    model_id=model_id, 
+    print_model_config=print_model_config, 
+    device=device)
+print("finished loading model")
 add_nvtx_hooks_to_every_module(model)
+print("warmup running")
 with nvtx.annotate("warmup", color="white"):
     # run a warm up generate
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        max_new_tokens=max_new_tokens,
-        do_sample=True,
-        top_p=0.4,
-        temperature=0.6)
-print_system_ram("After Models Loaded")
+        max_new_tokens=1)
+torch.cuda.synchronize()
 gc.collect()
 torch.cuda.synchronize()
+torch.use_deterministic_algorithms(True, warn_only=True)
 print("warmup finished")
+print_system_ram("Memory After Warmup")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
     if prefill_decode:

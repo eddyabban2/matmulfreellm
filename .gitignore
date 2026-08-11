@@ -18,5 +18,6 @@ bitnet/
 *.log
 !tensorrt_changes.log
 *.pdf
+*.pth
 nsys_runs/
 ncu_runs/

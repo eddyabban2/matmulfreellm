@@ -6,12 +6,7 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
-from transformers import AutoModelForCausalLM, logging
-from mmfreelm.benchmark.utils import (
-    generate_random_input_ids,
-    generate_dataset_input_ids,
-    add_nvtx_hooks_to_every_module,
-)
+from transformers import AutoModelForCausalLM, logging, AutoConfig
 import argparse
 import nvtx
 import transformers.integrations.bitnet as bitnet
@@ -19,7 +14,18 @@ from mmfreelm.integrations import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from mmfreelm.benchmark.scaled_mmfree import print_system_ram
+
+from mmfreelm.benchmark.utils import (
+    generate_random_input_ids,
+    generate_dataset_input_ids,
+    add_nvtx_hooks_to_every_module,
+)
+from mmfreelm.benchmark.scaled_bitnet import (
+    scaled_model_config,
+    standard_model_config,
+    create_custom_bitnet,
+)
+from mmfreelm.benchmark.scaled_mmfree import print_system_ram 
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -47,13 +53,6 @@ parser.add_argument(
     "--batch_size",
     default=1,
     help="sets the batch size"
-)
-
-parser.add_argument(
-    "--use_original",
-    action='store_true',
-    default=False,
-    help="changes the model to using the original implementation"
 )
 
 parser.add_argument(
@@ -85,12 +84,6 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--model_name",
-    default='ridger/MMfreeLM-2.7B',
-    help="sets the model name to be used"
-)
-
-parser.add_argument(
     "--prefill_decode",
     action='store_true',
     default=False,
@@ -104,43 +97,51 @@ logging.set_verbosity_error()
 logging.disable_default_handler()
 logging.disable_propagation()
 
-model_name = args.model_name
+model_name = "microsoft/bitnet-b1.58-2B-4T"
 num_iterations = int(args.iterations)
 batch_size = int(args.batch_size)
 seq_len = int(args.seq_len)
 max_new_tokens = int(args.max_new_tokens)
 prefill_decode = args.prefill_decode
 
-if(args.use_original):
-    import mmfreelm_original
-else:
-    import mmfreelm
 batch = None
 
-MODEL_ID = None
-if model_name == "scaled_mmfree":
-    MODEL_ID = "ridger/MMfreeLM-2.7B"
-else: 
-    MODEL_ID = model_name
-
 if args.use_dataset_prompts:
-    batch = generate_dataset_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_dataset_input_ids(model_name, batch_size, seq_len)
 else: 
-    batch = generate_random_input_ids(MODEL_ID, batch_size, seq_len)
+    batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
+print("loading model")
+# 2. Initialize the model architecture directly from the config (uninitialized weights)
+model = AutoModelForCausalLM.from_config(scaled_model_config)
+print("initalized a temp model")
 
-model = None
-print("attempting to load model")
-if "ridger" in model_name:
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
-else: 
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-print("loaded model")
-print("warmup running")
+bitnet.replace_with_bitnet_linear(
+    model, 
+    quantization_config=scaled_model_config.quantization_config
+)
+print("quantizing model")
+
+# 3. Load your custom state dictionary from the local file
+state_dict = torch.load('scaled_bitnet.pth', weights_only=False)
+print("loaded state dictionary")
+
+# 4. Apply the loaded weights to the model
+model.load_state_dict(state_dict)
+print("dictionary loaded into model")
+
+# 5. Send the entire model to the GPU
+model = model.to("cuda")
+print_system_ram("Memory After Loading Model")
+
 add_nvtx_hooks_to_every_module(model)
+
+print(model)
+print("model loaded")
+    
+print("warmup running")
 with nvtx.annotate("warmup", color="white"):
-    # run a warm up generate
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -148,10 +149,10 @@ with nvtx.annotate("warmup", color="white"):
         do_sample=True,
         top_p=0.4,
         temperature=0.6)
-print_system_ram("After Models Loaded")
 gc.collect()
-torch.cuda.synchronize()
+torch.cuda.empty_cache()
 print("warmup finished")
+print_system_ram("Memory After Warmup")
 #generate call
 with nvtx.annotate("workload", color="cyan"):
     if prefill_decode:
@@ -161,7 +162,6 @@ with nvtx.annotate("workload", color="cyan"):
         with nvtx.annotate("switching between pre and deco", color="green"):
             past = out.past_key_values
             next_tok = out.logits[:, -1:, :].argmax(-1)
-            print("switching now")
         with nvtx.annotate("decode", color="blue"):
             with torch.no_grad():
                 for i in range(max_new_tokens-1):

@@ -23,6 +23,7 @@ from mmfreelm.modules import FusedCrossEntropyLoss, RMSNorm
 from mmfreelm.modules.activations import swiglu_linear, swiglu
 #from mmfreelm.ops.bitnet import BitLinear_Fuse as BitLinear
 from mmfreelm.ops.fusedbitnet import FusedBitLinear as BitLinear
+from mmfreelm.ops.fusedbitnet import CompressedType
 import nvtx
 
 logger = logging.get_logger(__name__)
@@ -55,10 +56,12 @@ class HGRNBitMLP(nn.Module):
         self.act_fn = ACT2FN[hidden_act]
 
     def forward(self, x):
-        with nvtx.annotate("HGRNBitMLP", color="blue"):
+        with nvtx.annotate("HGRNBitMLP Forward", color="blue"):
             y = self.gate_proj(x)
             gate, y = y.chunk(2, -1)
-            z = self.down_proj(swiglu(gate, y))
+            with nvtx.annotate("swiglu", color="orange"):
+                temp = swiglu(gate, y)
+            z = self.down_proj(temp)
             return z
 
 
@@ -86,15 +89,22 @@ class HGRNBitBlock(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act
         )
-    def set_compression(self, compression):
-        self.attn.i_proj.use_compressed_weights = compression
-        self.attn.f_proj.use_compressed_weights = compression
-        self.attn.g_proj.use_compressed_weights = compression
-        self.attn.o_proj.use_compressed_weights = compression
+    def set_compression(self, compression, device=None):
+        self.attn.i_proj.compressed_type = compression
+        self.attn.f_proj.compressed_type = compression
+        self.attn.g_proj.compressed_type = compression
+        self.attn.o_proj.compressed_type = compression
 
-        self.mlp.gate_proj.use_compressed_weights = compression
-        self.mlp.down_proj.use_compressed_weights = compression
+        self.mlp.gate_proj.compressed_type = compression
+        self.mlp.down_proj.compressed_type = compression
 
+        self.attn.i_proj.convert_weights(device=device)
+        self.attn.f_proj.convert_weights(device=device)
+        self.attn.g_proj.convert_weights(device=device)
+        self.attn.o_proj.convert_weights(device=device)
+
+        self.mlp.gate_proj.convert_weights(device=device)
+        self.mlp.down_proj.convert_weights(device=device)
 
     def forward(
         self,

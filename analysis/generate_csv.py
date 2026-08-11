@@ -11,7 +11,7 @@ import math
 import time
 import torch
 import gc
-from torch.profiler import profile, record_function, ProfilerActivity
+from torch.profiler import profile, ProfilerActivity
 from transformers import AutoModelForCausalLM, AutoTokenizer, logging
 from mmfreelm.benchmark.utils import generate_random_input_ids, generate_dataset_input_ids
 import transformers
@@ -19,10 +19,11 @@ import argparse
 import statistics
 from zeus.monitor import ZeusMonitor, PowerMonitor
 import csv
-from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import transformers.integrations.bitnet as bitnet
 from mmfreelm.integrations import bitnet as local_bitnet
 import mmfreelm
+from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
+from mmfreelm.ops.fusedbitnet import CompressedType
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -113,6 +114,7 @@ def benchmark_generation(model, batch_size, seq_len, num_iterations, max_new_tok
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
             max_new_tokens=max_new_tokens,
             do_sample=True,
             top_p=0.4,
@@ -204,6 +206,7 @@ def first_token_time(model, batch_size, seq_len, num_iterations, model_name='rid
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            min_new_tokens=1,
             max_new_tokens=1,
             do_sample=True,
             top_p=0.4,
@@ -285,6 +288,7 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     _ = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
+        min_new_tokens=1,
         max_new_tokens=max_new_tokens,
         do_sample=True,
         top_p=0.4,
@@ -297,19 +301,20 @@ def get_power_data(model, batch_size, seq_len, num_iterations, max_new_tokens, r
     start_time = time.time()
     monitor.begin_window(window_key, sync_execution=True)
     for _ in range(num_iterations):
-        _ = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=0.4,
-                temperature=0.6
-            )
+        model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            min_new_tokens=max_new_tokens,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            top_p=0.4,
+            temperature=0.6
+        )
     mes = monitor.end_window(window_key, sync_execution=True)
     end_time = time.time()
     timeline = power_monitor.get_power_timeline(
-        power_domain="device_instant",  # or "device_average" or "memory_average"
-        gpu_index=0,  # specify GPU, or None for all GPUs
+        power_domain="device_instant",
+        gpu_index=0,
         start_time=start_time,
         end_time=end_time
     )
@@ -326,6 +331,7 @@ def set_ridger_compression(compression, model):
     for layer in model.model.layers: 
         layer.set_compression(compression)
 def set_bitnet_compression(compression, model):
+    compression = (compression == CompressedType.NAIVE) 
     for layer in model.model.layers:
         layer.self_attn.q_proj.compress_weights = compression
         layer.self_attn.k_proj.compress_weights = compression
@@ -371,32 +377,40 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
     device = torch.cuda.get_device_name(torch.cuda.current_device())
     print("Collecting Data to be used in a CSV")
     first_row = True
-    batch_sizes = get_batch_sizes()
+    min_batch_power = int(args.min_batch_power)
+    max_batch_power = int(args.max_batch_power)
     from datetime import datetime
-    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename =  'outputs/csvs/benchmark_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now())
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         row = {'device': device, 'model': model_name}
         print(f"Collecting data for model: {model_name}")
-        for packed in ([True] if model_name == "ridger/MMfreeLM-2.7B" else [True, False]):
+        if model_name == "ridger/MMfreeLM-2.7B":
+            from mmfreelm.packed_loader import load_packed_hgrn
+
+            compression_modes = [True]
+        else:
+            compression_modes = [CompressedType.FLOAT16, CompressedType.NAIVE]
+
+        for packed in compression_modes:
             if model_name == "ridger/MMfreeLM-2.7B":
-                from mmfreelm.packed_loader import load_packed_hgrn
                 model = load_packed_hgrn(model_name)
             else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True
                 ).cuda()
-            if 'ridger' in model_name:
+            if model_name != "ridger/MMfreeLM-2.7B" and "ridger" in model_name:
+                model = model.half()
                 set_ridger_compression(packed, model)
-            if 'bitnet' in model_name: 
+            if "bitnet" in model_name:
                 set_bitnet_compression(packed, model)
-            row["Weight Packing"] = packed 
+            row["Weight Packing"] = packed
             run_warmup(model, model_name)
             gc.collect()
             torch.cuda.empty_cache()
-            row["Memory Usage"] = torch.cuda.memory_allocated()/(1024**3)
-            print(torch.cuda.memory_summary())
-            for batch_size in batch_sizes:
+            row["Memory Usage"] = torch.cuda.memory_allocated() / (1024**3)
+            for batch_power in reversed(range(min_batch_power, max_batch_power)):
+                batch_size = 2**batch_power
                 row['batch size'] = batch_size
                 print(f"\tCollecting data for batch size: {batch_size}")
                 try:
@@ -410,6 +424,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                     detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                     end_time = time.time()
                     print(f"\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+                    if args.collect_power_data:
+                        get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
                 except RuntimeError as error:
                     if not is_cuda_oom(error):
                         raise
@@ -528,6 +544,13 @@ if __name__ == "__main__":
         "--model", 
         default="ridger/MMfreeLM-2.7B",
         help="selects model",
+    )
+
+    parser.add_argument(
+        "--collect_power_data",
+        action='store_true',
+        default=False,
+        help="changes whether we collect power data"
     )
 
     args = parser.parse_args()

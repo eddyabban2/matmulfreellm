@@ -18,7 +18,12 @@ import csv
 import transformers.integrations.bitnet as bitnet
 from mmfreelm.integrations import bitnet as local_bitnet
 from mmfreelm.benchmark.scaled_bitnet import create_custom_bitnet, standard_model_config
-from analysis.generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
+from analysis.generate_csv import (
+    benchmark_generation,
+    detailed_runtime_metrics,
+    get_power_data,
+    run_warmup,
+)
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -169,6 +174,11 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_config):
             detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
             end_time = time.time()
             print(f"\t\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+
+            start_time = time.time()
+            get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+            end_time = time.time()
+            print(f"\t\t\tCollected power data in {end_time-start_time} sec")
             if(first_row):
                 csvwriter = csv.DictWriter(csvfile, row.keys())
                 csvwriter.writeheader()
@@ -190,12 +200,10 @@ def main():
     model_config.num_hidden_layers = int(args.num_hidden_layers)
     model_config.num_key_value_heads = int(args.num_key_value_heads)
     model_config.vocab_size = int(args.vocab_size)
-    print("running this test")
     sequence_length=int(args.sequence_length)
     iters=int(args.iterations)
     max_new_tokens=int(args.max_new_tokens)
     
     create_csv_data(sequence_length, iters, max_new_tokens, model_config)
-print("testing")
 if __name__ == "__main__":
     main()

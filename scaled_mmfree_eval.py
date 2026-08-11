@@ -2,8 +2,7 @@
 Creates a CSV file with benchmark results for MMFreeLM models.
 
 Example usage:
-    python scaled_mmfree_eval.py -s 32 --max_new_tokens 32 -i 5 --min_batch_power 0 --max_batch_power 2 \
-        --weight_multiplier 1 --layers_multiplier 1 --vocab_multiplier 1
+    python scaled_mmfree_eval.py -s 32 --max_new_tokens 32 -i 5 --min_batch_power 0 --max_batch_power 1 --weight_multiplier 1 --layers_multiplier 1 --vocab_multiplier 1
 """
 
 import os
@@ -14,8 +13,13 @@ import gc
 from transformers import logging
 import argparse
 import csv
-from mmfreelm.benchmark.scaled_mmfree import create_scaled_mmfree
-from analysis.generate_csv import benchmark_generation, detailed_runtime_metrics, run_warmup
+from mmfreelm.benchmark.scaled_mmfree import create_scaled_model_from_config
+from analysis.generate_csv import (
+    benchmark_generation,
+    detailed_runtime_metrics,
+    get_power_data,
+    run_warmup,
+)
 
 parser = argparse.ArgumentParser(
     description="creates a csv file with benchmark results"
@@ -31,21 +35,21 @@ parser.add_argument(
 parser.add_argument(
     "-w", 
     "--weight_multiplier",
-    default=0.5,
+    default=1,
     help="sets the number of we multiply the number of weights in each layer by"
 )
 
 parser.add_argument(
     "-l", 
     "--layers_multiplier",
-    default=0.5,
+    default=1,
     help="sets the number  we multiply the number of layers by"
 )
 
 parser.add_argument(
     "-v", 
     "--vocab_multiplier",
-    default=1.5,
+    default=1,
     help="sets the number  we multiply the number of layers by"
 )
 
@@ -71,7 +75,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--max_batch_power", 
-    default=1,
+    default=3,
     help="stores the maximum batch power to go up to when profiling",
 )
 
@@ -140,7 +144,7 @@ def create_csv_data(
             }
         for weight_compression in weight_compression_settings:
             print(f"\tCollecting data for scaled mmfree with compression status {weight_compression}")
-            model = create_scaled_mmfree(
+            model = create_scaled_model_from_config(
                 layers_multiplier=layers_multiplier, 
                 weight_multiplier=weight_multiplier, 
                 vocab_size_multiplier=vocab_multiplier, 
@@ -170,7 +174,13 @@ def create_csv_data(
                 start_time = time.time()
                 detailed_runtime_metrics(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name, use_dataset_prompts=False)
                 end_time = time.time()
-                print(f"\t\t\tPrefill and Decode Times completed in {end_time-start_time} sec")
+                print(f"\t\t\tCollected more detailed runtime metrics in {end_time-start_time} sec")
+
+                start_time = time.time()
+                get_power_data(model, batch_size, sequence_length, iters, max_new_tokens, row, model_name=model_name)
+                end_time = time.time()
+                print(f"\t\t\tCollected power data in {end_time-start_time} sec")
+
                 if(first_row):
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()

@@ -1,7 +1,10 @@
 # Used To Collect Roofline Data
-#   python auto_profiler.py -s 100 --max_new_tokens 3 --min_batch_power 10 --max_batch_power 10
-#   python auto_profiler.py -s 100 --max_new_tokens 3 --min_batch_power 10 --max_batch_power 10 --model_name microsoft/bitnet-b1.58-2B-4T
-
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name microsoft/bitnet-b1.58-2B-4T
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8 --model_name microsoft/bitnet-b1.58-2B-4T
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name scaled_mmfree
+#  python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 7 --max_batch_power 7 --model_name scaled_mmfree
 import subprocess
 import argparse
 import sys
@@ -12,6 +15,7 @@ import csv
 import pandas as pd
 import datetime
 import metrics_helper
+import io
 
 from pathlib import Path
 import logging
@@ -82,29 +86,39 @@ def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B
 
 def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
+    quiet_run_file = '/quiet_run.py'
+    if model_name == 'scaled_mmfree': 
+        quiet_run_file = "/scaled_mmfree_quiet_run.py"
+    elif model_name == 'scaled_bitnet':
+        quiet_run_file = "/scaled_bitnet_quiet_run.py"
     benchmark_command = [
         ncu_path, "--nvtx",
         "--nvtx-include", "workload/",
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
-        "--replay-mode", "application",
-        "--app-replay-match", "name",
+        # "--replay-mode", "application",
+        # "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
         "--metrics", metrics_string,
-        "python", os.getcwd() + "/quiet_run.py",
+        "python", os.getcwd() + quiet_run_file,
         "-b", str(bs),
         "-s", str(seq_len),
         "-n", str(new_tokens),
         "-i", "1", 
-        "--model_name", model_name, 
-        "--use_dataset_prompts", 
+        # "--use_dataset_prompts", 
         "--prefill_decode"
     ]
+    if "scaled" not in model_name:
+        benchmark_command.append("--model_name")
+        benchmark_command.append(model_name)
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # subprocess.run(benchmark_command, check=True)
+    start_time = time.time()
+    subprocess.run(benchmark_command, check=True)
+    end_time = time.time()
+    logger.debug(f"Command took {end_time-start_time} seconds")
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -159,14 +173,14 @@ def flatten_kernels(df):
 
 def add_additional_columns(df, bs, new_tokens, seq_len):
 
-    dram_estimation = (df["lts__d_sectors_fill_device.sum (sector)"]*32 + df["lts__d_sectors_fill_sysmem.sum (sector)"]*32) / 1000
-    if "dram__bytes.sum (Kbyte)" not in df:
-        df["dram__bytes.sum (Kbyte)"] = dram_estimation
-    else: 
-        df["estimated dram__bytes.sum (Kbyte)"] = dram_estimation
-        df["accuracy of dram_bytes estimation (%)"] = df["estimated dram__bytes.sum (Kbyte)"] / df["dram__bytes.sum (Kbyte)"]
-        logger.info("description of dram bytes estimation accuracy")
-        logger.info(df["accuracy of dram_bytes estimation (%)"].describe())
+    # dram_estimation = (df["lts__d_sectors_fill_device.sum (sector)"]*32 + df["lts__d_sectors_fill_sysmem.sum (sector)"]*32) / 1000
+    # if "dram__bytes.sum (Kbyte)" not in df:
+    #     df["dram__bytes.sum (Kbyte)"] = dram_estimation
+    # else: 
+    #     df["estimated dram__bytes.sum (Kbyte)"] = dram_estimation
+    #     df["accuracy of dram_bytes estimation (%)"] = df["estimated dram__bytes.sum (Kbyte)"] / df["dram__bytes.sum (Kbyte)"]
+    #     logger.info("description of dram bytes estimation accuracy")
+    #     logger.info(df["accuracy of dram_bytes estimation (%)"].describe())
 
     double_precision_flops = (df["smsp__sass_thread_inst_executed_op_dadd_pred_on.sum (inst)"] + 
              df["smsp__sass_thread_inst_executed_op_dfma_pred_on.sum (inst)"]+
@@ -290,7 +304,11 @@ def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name
     logger.info(' '.join(extract_data_command))
     with open(csv_name, "w") as f:
         subprocess.run(extract_data_command, check=True, stdout=f)
-    df = pd.read_csv(csv_name)
+    with open(csv_name, "r") as f:
+        raw_lines = f.readlines()
+    clean_lines = [line for line in raw_lines if not line.startswith("==")]
+    
+    df = pd.read_csv(io.StringIO("".join(clean_lines)))
     df = df.replace(',','', regex=True)
     return df
 
@@ -307,7 +325,7 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
     df.head(n=10000).to_csv(os.getcwd()+ f"/outputs/csvs/unflattened_kernels-{workload_string}.csv")
     df = flatten_kernels(df)
-    df = add_additional_columns(df, bs, new_tokens, seq_len)
+    # df = add_additional_columns(df, bs, new_tokens, seq_len)
     df.head(n=10000).to_csv(f"outputs/csvs/flattened-kernels-with_metrics-{workload_string}.csv")
     fraction_of_memory_from_weights = estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len)
     full_workload_row = get_metrics_from_data_frame(df, fraction_of_memory_from_weights)
@@ -401,6 +419,30 @@ def extract_additional_workload_data(df, workload_str):
     unpack_run_time_us = extract_run_time(unpack_df)
     unpack_dram_kbytes_accessed = extract_dram_usage(unpack_df)
 
+    post_quant_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('post quantization processing')]
+    post_quant_double_precision_count, post_quant_single_precision_count, post_quant_half_precision_count, post_quant_tensor_count = extract_flops(post_quant_df)
+    post_quant_flop_count = post_quant_double_precision_count +  post_quant_single_precision_count +  post_quant_half_precision_count +  post_quant_tensor_count
+    post_quant_run_time_us = extract_run_time(post_quant_df)
+    post_quant_dram_kbytes_accessed = extract_dram_usage(post_quant_df)
+
+    act_quant_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('activation quantization')]
+    act_quant_double_precision_count, act_quant_single_precision_count, act_quant_half_precision_count, act_quant_tensor_count = extract_flops(act_quant_df)
+    act_quant_flop_count = act_quant_double_precision_count +  act_quant_single_precision_count +  act_quant_half_precision_count +  act_quant_tensor_count
+    act_quant_run_time_us = extract_run_time(act_quant_df)
+    act_quant_dram_kbytes_accessed = extract_dram_usage(act_quant_df)
+
+    nvtx_col = "thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"
+    other_regions = ['activation quantization', 'post quantization processing', 'unpack weights', 'ternary matmul']
+    pattern = '|'.join(other_regions)
+    bitnet_atten_df = df[df[nvtx_col].str.contains('BitNetAttention') & ~df[nvtx_col].str.contains(pattern, case=False, na=False)]
+    for index, row in bitnet_atten_df.iterrows():
+        print(index, row)
+    bitnet_atten_double_precision_count, bitnet_atten_single_precision_count, bitnet_atten_half_precision_count, bitnet_atten_tensor_count = extract_flops(bitnet_atten_df)
+    bitnet_atten_flop_count = bitnet_atten_double_precision_count +  bitnet_atten_single_precision_count +  bitnet_atten_half_precision_count +  bitnet_atten_tensor_count
+    bitnet_atten_run_time_us = extract_run_time(bitnet_atten_df)
+    bitnet_atten_dram_kbytes_accessed = extract_dram_usage(bitnet_atten_df)
+    
+
     # prefill_df = df[df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')]
     # prefill_double_precision_count, prefill_single_precision_count, prefill_half_precision_count, prefill_tensor_count = extract_flops(prefill_df)
     # prefill_flop_count = prefill_double_precision_count +  prefill_single_precision_count +  prefill_half_precision_count +  prefill_tensor_count
@@ -431,16 +473,25 @@ def extract_additional_workload_data(df, workload_str):
         f.write(f"{(mlp_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with HGRNBitMLP\n")
         f.write(f"{(linear_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Linear\n")
         f.write(f"{(unpack_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Post Quantization\n")
+        f.write(f"{(act_quant_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with Activation Quantization\n")
+        f.write(f"{(bitnet_atten_flop_count/flop_count)*100}% of the FLOPs are from kernels marked with bitnet attention\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with HGRNBitMLP\n")
         f.write(f"{(linear_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Linear\n")
         f.write(f"{(unpack_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Post Quntization\n")
+        f.write(f"{(act_quant_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with Activation Quntization\n")
+        f.write(f"{(bitnet_atten_dram_kbytes_accessed/dram_kbytes_accessed)*100}% of the dram bytes accessed are from kernels marked with attention\n")
         f.write(f"==============================================================================================\n")
         f.write(f"{(atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with HGRNBitAttentionForward\n")
         f.write(f"{(mlp_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with  HGRNBitMLP\n")
         f.write(f"{(linear_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Linear\n")
         f.write(f"{(unpack_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Unpacking Weights\n")
+        f.write(f"{(post_quant_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with Post Quantization\n")
+        f.write(f"{(act_quant_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with activation Quantization\n")
+        f.write(f"{(bitnet_atten_run_time_us/run_time_us)*100}% of the runtime is from kernels marked with other attention\n")
         f.write(f"==============================================================================================\n")
         if atten_flop_count != 0: 
             f.write(f"{(atten_double_precision_count/atten_flop_count)*100}% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations\n")
