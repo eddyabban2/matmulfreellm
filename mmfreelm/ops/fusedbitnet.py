@@ -645,7 +645,7 @@ class FusedBitLinear(BitLinear):
         self.cached_weights = None
         self.cached_scale = None
         self.compressed_weights = None
-        self.compressed_type = CompressedType.FLOAT16
+        self.compressed_type = CompressedType.NAIVE
         self.test_compression = False 
     def _apply(self, fn):
         super()._apply(fn)
@@ -678,7 +678,7 @@ class FusedBitLinear(BitLinear):
         self.convert_weights(device=device)
 
     def convert_weights(self, device=None):
-        if(self.compressed_weights == None and self.cached_weights == None):
+        if(self.compressed_weights is None) and (self.cached_weights is None):
             self.cached_weights = weight_quant(self.weight)
             self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
             del self.weight
@@ -712,7 +712,7 @@ class FusedBitLinear(BitLinear):
 
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear", color="red"):
-            if(self.compressed_weights == None and self.cached_weights == None):
+            if(self.compressed_weights is None) and (self.cached_weights is None):
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
                 del self.weight

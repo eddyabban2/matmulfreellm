@@ -152,9 +152,11 @@ def create_scaled_model_from_config(
     if print_model_config:
         print_system_ram("After Loading model model uncompressed")
     for idx, layer in enumerate(model.model.layers): 
-        layer.set_compression(compression_type, device=device)
+        layer.set_compression(compression_type, device=device, convert_weights=True)
         if print_model_config:
             print_system_ram(f"After compressing layer: {idx}")
+    model.lm_head.compressed_type = compression_type
+    model.lm_head.convert_weights(device=device)
     gc.collect()
     torch.cuda.empty_cache()
     if print_model_config:

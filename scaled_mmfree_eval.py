@@ -144,7 +144,8 @@ def create_csv_data(
                 weight_multiplier=weight_multiplier, 
                 vocab_size_multiplier=vocab_multiplier, 
                 print_model_config=args.print_model, 
-                weight_compression=weight_compression)
+                weight_compression=weight_compression, 
+                device="cuda")
 
             print("\tmodel loaded\n\tRunning warmup")
             run_warmup(model, model_name)
