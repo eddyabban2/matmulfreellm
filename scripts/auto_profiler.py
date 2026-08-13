@@ -116,10 +116,10 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
         benchmark_command.append(model_name)
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    start_time = time.time()
-    subprocess.run(benchmark_command, check=True)
-    end_time = time.time()
-    logger.debug(f"Command took {end_time-start_time} seconds")
+    # start_time = time.time()
+    # subprocess.run(benchmark_command, check=True)
+    # end_time = time.time()
+    # logger.debug(f"Command took {end_time-start_time} seconds")
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -361,22 +361,22 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     
     if 'ridger' in workload_string:
         first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
-        first_atte_region_row['Workload'] = f'2.7B first HGRNBitAttention region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_atte_region_row['Workload'] = f'{clean_model_name}  first HGRNBitAttention region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
         first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df, fraction_of_memory_from_weights)
-        first_mlp_region_row['Workload'] = f'2.7B first HGRNBitMLP region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_mlp_region_row['Workload'] = f'{clean_model_name}  first HGRNBitMLP region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
         first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
         first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
 
     linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
-    linear_region_row['Workload'] = f'2.7B first linearFunction region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    linear_region_row['Workload'] = f'{clean_model_name} first linearFunction region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     prefill_region_row = get_metrics_from_data_frame(prefill_kernels_df, fraction_of_memory_from_weights)
-    prefill_region_row['Workload'] = f'2.7B first prefill region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    prefill_region_row['Workload'] = f'{clean_model_name}  first prefill region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     decode_region_row = get_metrics_from_data_frame(decode_kernels_df, fraction_of_memory_from_weights)
-    decode_region_row['Workload'] = f'2.7B first decode region: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    decode_region_row['Workload'] = f'{clean_model_name}  first decode region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
 
     logger.info(f"full workload row generated: {full_workload_row}")
     if 'ridger' in workload_string:
@@ -436,8 +436,8 @@ def extract_additional_workload_data(df, workload_str):
     other_regions = ['activation quantization', 'post quantization processing', 'unpack weights', 'ternary matmul']
     pattern = '|'.join(other_regions)
     bitnet_atten_df = df[df[nvtx_col].str.contains('BitNetAttention') & ~df[nvtx_col].str.contains(pattern, case=False, na=False)]
-    for index, row in bitnet_atten_df.iterrows():
-        print(index, row)
+    # for index, row in bitnet_atten_df.iterrows():
+    #     print(index, row)
     bitnet_atten_double_precision_count, bitnet_atten_single_precision_count, bitnet_atten_half_precision_count, bitnet_atten_tensor_count = extract_flops(bitnet_atten_df)
     bitnet_atten_flop_count = bitnet_atten_double_precision_count +  bitnet_atten_single_precision_count +  bitnet_atten_half_precision_count +  bitnet_atten_tensor_count
     bitnet_atten_run_time_us = extract_run_time(bitnet_atten_df)
