@@ -16,6 +16,7 @@ import random
 import numpy as np
 import gc 
 from scaled_mmfree import print_system_ram
+from mmfreelm.ops.fusedbitnet import CompressedType
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -93,6 +94,13 @@ parser.add_argument(
     help="sets whether we mark prefill and decode sections of the workload"
 )
 
+parser.add_argument(
+    "--compression",
+    action='store_true',
+    default=False,
+    help="sets whether we mark prefill and decode sections of the workload"
+)
+
 print("quiet run is running")
 args = parser.parse_args()
 
@@ -128,10 +136,25 @@ attention_mask = batch["attention_mask"].cuda()
 
 model = None
 print("attempting to load model")
+compression = CompressedType.NAIVE if args.compression else CompressedType.FLOAT16
 if "ridger" in model_name:
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda().half()
+    for idx,layer in enumerate(model.model.layers): 
+            layer.set_compression(compression, device="cuda")
+            print_system_ram(f"After compressing layer {idx}: ")
+    model.lm_head.compressed_type = compression
 else: 
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+    compression = (compression == CompressedType.NAIVE) 
+    for layer in model.model.layers:
+        layer.self_attn.q_proj.compress_weights = compression
+        layer.self_attn.k_proj.compress_weights = compression
+        layer.self_attn.v_proj.compress_weights = compression
+        layer.self_attn.o_proj.compress_weights = compression
+
+        layer.mlp.gate_proj.compress_weights = compression
+        layer.mlp.up_proj.compress_weights = compression
+        layer.mlp.down_proj.compress_weights = compression
 print("loaded model")
 print("warmup running")
 add_nvtx_hooks_to_every_module(model)

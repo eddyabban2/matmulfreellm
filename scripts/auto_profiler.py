@@ -68,6 +68,13 @@ parser.add_argument(
     choices=['all', 'jetson'],
     default="all")
 
+parser.add_argument(
+    "--compression",
+    action='store_true',
+    default=False,
+    help="sets whether we mark prefill and decode sections of the workload"
+)
+
 args = parser.parse_args()
 
 ncu_path = subprocess.check_output(["which", "ncu"]).decode('ascii').strip()
@@ -80,13 +87,13 @@ if(args.metrics == "all"):
 elif(args.metrics == "jetson"):
     metrics_string = metrics_helper.jetson_metrics()
 
-def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+def create_report_name(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', compression=False):
     model_name = model_name.replace("/", "-")
-    return  os.getcwd() + "/outputs/ncu_runs/autoProfilerFor" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len)
+    return os.getcwd() + "/outputs/ncu_runs/autoProfilerFor" + model_name + "batch" + str(bs) + "newTokens" + str(new_tokens) + "sequence" + str(seq_len) + "compression" + str(compression) 
     
 
-def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
-    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
+def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', compression=False):
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name, compression=compression)
     quiet_run_file = '/quiet_run.py'
     if model_name == 'scaled_mmfree': 
         quiet_run_file = "/scaled_mmfree_quiet_run.py"
@@ -114,12 +121,14 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     if "scaled" not in model_name:
         benchmark_command.append("--model_name")
         benchmark_command.append(model_name)
+    if compression: 
+        benchmark_command.append("--compression")
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # start_time = time.time()
-    # subprocess.run(benchmark_command, check=True)
-    # end_time = time.time()
-    # logger.debug(f"Command took {end_time-start_time} seconds")
+    start_time = time.time()
+    subprocess.run(benchmark_command, check=True)
+    end_time = time.time()
+    logger.debug(f"Command took {end_time-start_time} seconds")
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
@@ -292,9 +301,9 @@ def get_metrics_from_data_frame(df, fraction_of_memory_from_weights):
 
     return results
 
-def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+def extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', compression=False):
     logger.info("attempting to extract data using a csv")
-    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name)
+    report_name = create_report_name(bs, new_tokens, seq_len, model_name=model_name, compression=compression)
     csv_name = report_name +".csv"
     extract_data_command = [
         ncu_path, 
@@ -320,10 +329,10 @@ def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
     output_floats = (2560*bs*seq_len*5 + 13824*bs*seq_len)*32 + (bs*seq_len*32000)
     return weight_floats/(weight_floats+ activation_floats + output_floats)
 
-def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
+def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', compression=False):
     clean_model_name = model_name.replace("/","-")
-    workload_string = f"model{clean_model_name}-{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}"
-    df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name)
+    workload_string = f"model{clean_model_name}-{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}compression-{compression}"
+    df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name, compression=compression)
     df.head(n=10000).to_csv(os.getcwd()+ f"/outputs/csvs/unflattened_kernels-{workload_string}.csv")
     df = flatten_kernels(df)
     # df = add_additional_columns(df, bs, new_tokens, seq_len)
@@ -353,30 +362,30 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B'):
     decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
 
 
-    decode_string = f'{clean_model_name} decode with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    decode_string = f'{clean_model_name} decode with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
     extract_additional_workload_data(decode_kernels_df, decode_string)
 
-    prefill_string = f'{clean_model_name} prefill with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    prefill_string = f'{clean_model_name} prefill with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
     extract_additional_workload_data(prefill_kernels_df, prefill_string)
     
     if 'ridger' in workload_string:
         first_atte_region_row = get_metrics_from_data_frame(first_group_of_attention_kernels_df, fraction_of_memory_from_weights)
-        first_atte_region_row['Workload'] = f'{clean_model_name}  first HGRNBitAttention region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_atte_region_row['Workload'] = f'{clean_model_name}  first HGRNBitAttention region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
         first_mlp_region_row = get_metrics_from_data_frame(first_group_of_mlp_kernels_df, fraction_of_memory_from_weights)
-        first_mlp_region_row['Workload'] = f'{clean_model_name}  first HGRNBitMLP region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+        first_mlp_region_row['Workload'] = f'{clean_model_name}  first HGRNBitMLP region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
         first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
         first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
 
     linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
-    linear_region_row['Workload'] = f'{clean_model_name} first linearFunction region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    linear_region_row['Workload'] = f'{clean_model_name} first linearFunction region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
     prefill_region_row = get_metrics_from_data_frame(prefill_kernels_df, fraction_of_memory_from_weights)
-    prefill_region_row['Workload'] = f'{clean_model_name}  first prefill region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    prefill_region_row['Workload'] = f'{clean_model_name}  first prefill region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
     decode_region_row = get_metrics_from_data_frame(decode_kernels_df, fraction_of_memory_from_weights)
-    decode_region_row['Workload'] = f'{clean_model_name}  first decode region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
+    decode_region_row['Workload'] = f'{clean_model_name}  first decode region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
     logger.info(f"full workload row generated: {full_workload_row}")
     if 'ridger' in workload_string:
@@ -530,8 +539,6 @@ def log_full_df(df):
 
 def main():
     logger.info("Extracting Roofline Data")
-    from datetime import datetime
-    filename = f'outputs/csvs/roofline_data{curr_date_time}.csv'
     sequence_length = int(args.sequence_length)
     max_new_tokens = int(args.max_new_tokens)
     if(max_new_tokens < 2):
@@ -540,14 +547,16 @@ def main():
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
     model_name = args.model_name
+    clean_model_name = model_name.replace("/","-")
     first_row = True
     start = time.perf_counter()
     threads = []
+    filename = f'outputs/csvs/roofline_data{clean_model_name}min_batch{2**min_batch_power}maxBatch{2**max_batch_power}seqLen{sequence_length}Compression:{args.compression}.csv'
     with open(filename, 'w') as csvfile:
         for batch_power in reversed(range(min_batch_power, max_batch_power+1)):
             batch_size = 2**batch_power
-            run_ncu_profile(batch_size, max_new_tokens, sequence_length, model_name=model_name)
-            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length, model_name))
+            run_ncu_profile(batch_size, max_new_tokens, sequence_length, model_name=model_name, compression=args.compression)
+            thread = CustomThread(target=create_rows, args=(batch_size, max_new_tokens, sequence_length, model_name, args.compression))
             threads.append(thread)
             thread.start()
         for thread in threads:
@@ -559,7 +568,7 @@ def main():
                     first_row = False
                 csvwriter.writerow(row) 
     end = time.perf_counter()
-    logger.info(f"Data for Roofline extracted")
+    logger.info(f"Data for Roofline extracted in {end-start} seconds")
     
 if __name__ == "__main__":
     main()
