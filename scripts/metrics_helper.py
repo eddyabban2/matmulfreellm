@@ -8,6 +8,8 @@ memory_metrics = [
     "dram__bytes_read.avg", 
     "dram__bytes_write.sum", 
     "dram__bytes_write.avg", 
+    "dram__bytes_op_read.sum", 
+    "dram__bytes_op_write.sum"
 
 ]
 
