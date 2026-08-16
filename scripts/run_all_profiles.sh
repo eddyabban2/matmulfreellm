@@ -11,8 +11,8 @@ python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_bat
 conda activate bitnet
 python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name microsoft/bitnet-b1.58-2B-4T 2>&1 | tee log5.log
 python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 0 --max_batch_power 0 --model_name microsoft/bitnet-b1.58-2B-4T --compression 2>&1 | tee log6.log
-# python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8 --model_name microsoft/bitnet-b1.58-2B-4T 2>&1 | tee log7.log
-# python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 8 --max_batch_power 8 --model_name microsoft/bitnet-b1.58-2B-4T --compression 2>&1 | tee log8.log
+python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 7 --max_batch_power 7 --model_name microsoft/bitnet-b1.58-2B-4T 2>&1 | tee log7.log
+python auto_profiler.py -s 1000 --max_new_tokens 2 --min_batch_power 7 --max_batch_power 7 --model_name microsoft/bitnet-b1.58-2B-4T --compression 2>&1 | tee log8.log
 
 cat /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_dataridger-MMfreeLM-2.7Bmin_batch1maxBatch1seqLen1000Compression:False.csv > /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
 tail -n +2  /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_dataridger-MMfreeLM-2.7Bmin_batch1maxBatch1seqLen1000Compression:True.csv >> /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
@@ -21,3 +21,5 @@ tail -n +2  /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_dataridger-MMf
 
 tail -n +2 /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_datamicrosoft-bitnet-b1.58-2B-4Tmin_batch1maxBatch1seqLen1000Compression:False.csv >> /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
 tail -n +2 /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_datamicrosoft-bitnet-b1.58-2B-4Tmin_batch1maxBatch1seqLen1000Compression:True.csv >> /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
+tail -n +2 /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_datamicrosoft-bitnet-b1.58-2B-4Tmin_batch128maxBatch128seqLen1000Compression:False.csv >> /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
+tail -n +2 /home/eabban/eddy_matmulfreellm/outputs/csvs/roofline_datamicrosoft-bitnet-b1.58-2B-4Tmin_batch128maxBatch128seqLen1000Compression:True.csv >> /home/eabban/eddy_matmulfreellm/paper/paper_csv/roofline.csv
