@@ -170,7 +170,6 @@ def create_scaled_model_from_config(
     gc.collect()
     torch.cuda.empty_cache()
     return model
-    
 
 process = psutil.Process(os.getpid())
 def print_system_ram(label):

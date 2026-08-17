@@ -105,8 +105,8 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', 
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
-        # "--replay-mode", "application",
-        # "--app-replay-match", "name",
+        "--replay-mode", "application",
+        "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
         "--metrics", metrics_string,
@@ -125,10 +125,10 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', 
         benchmark_command.append("--compression")
     logger.debug(f"running command {' '.join(benchmark_command)}")
     # subprocess.run(benchmark_command, check=True, stdout=subprocess.DEVNULL)
-    # start_time = time.time()
-    # subprocess.run(benchmark_command, check=True)
-    # end_time = time.time()
-    # logger.debug(f"Command took {end_time-start_time} seconds")
+    start_time = time.time()
+    subprocess.run(benchmark_command, check=True)
+    end_time = time.time()
+    logger.debug(f"Command took {end_time-start_time} seconds")
     
 def flatten_kernels(df):
     # Conversion factors to a base unit (bytes, seconds, instructions)
