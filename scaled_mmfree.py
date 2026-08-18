@@ -8,6 +8,7 @@ import math
 from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from mmfreelm.ops.fusedbitnet import CompressedType
+from transformers import AutoModelForCausalLM
 import os
 import psutil
 from mmfreelm.models.hgrn_bit.modeling_hgrn_bit import HGRNBitModel, HGRNBitPreTrainedModel, HGRNBitBlock
@@ -181,6 +182,8 @@ class ScalableHGRNBitForCausalLM(HGRNBitForCausalLM):
             self.model = ScalableHGRNBitModel(config)
             self.vocab_size = config.vocab_size
             self.lm_head = FusedBitLinear(config.hidden_size, config.vocab_size, bias=False)
+            self.lm_head.compressed_type = config.compressed_type
+            self.lm_head.convert_weights(device=config.device)
     
 class ScalableHGRNBitModel(HGRNBitModel):
     def __init__(self, config: HGRNBitConfig):
@@ -284,6 +287,8 @@ def create_model_from_scratch(
     torch.set_default_dtype(previous_dtype)
     gc.collect()
     torch.cuda.empty_cache()
+    if print_model_config:
+        print(model)
     return model
 
 process = psutil.Process(os.getpid())
@@ -297,12 +302,11 @@ def print_system_ram(label):
 def main():
 
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier=1
-    weight_multiplier=1
-    vocab_size_multiplier=1
+    layers_multiplier=2.5
+    weight_multiplier=3.9375
+    vocab_size_multiplier=4
     print_model_config = True
-    use_weight_compression = False
-    print_system_ram("System RAM Before Loading")
+    use_weight_compression = True
     model = create_model_from_scratch(
         layers_multiplier=layers_multiplier, 
         weight_multiplier=weight_multiplier, 
@@ -311,22 +315,6 @@ def main():
         print_model_config=print_model_config, 
         weight_compression=use_weight_compression
     )
-    # model = create_scaled_model_from_config(
-    #     layers_multiplier=layers_multiplier, 
-    #     weight_multiplier=weight_multiplier, 
-    #     vocab_size_multiplier=vocab_size_multiplier, 
-    #     model_id=MODEL_ID, 
-    #     print_model_config=print_model_config, 
-    #     weight_compression=use_weight_compression
-    # )
-    # model = create_scaled_mmfree(
-    #     layers_multiplier=layers_multiplier, 
-    #     weight_multiplier=weight_multiplier, 
-    #     vocab_size_multiplier=vocab_size_multiplier, 
-    #     model_id=MODEL_ID, 
-    #     print_model_config=print_model_config, 
-    #     weight_compression=use_weight_compression
-    # )
     print_system_ram("System RAM After Loading Model")
 
     batch_size = 5
