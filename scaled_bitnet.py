@@ -1,10 +1,14 @@
 import torch
-from transformers import BitNetConfig, BitNetForCausalLM, AutoTokenizer
+from torch import nn
+from transformers import BitNetConfig, BitNetForCausalLM, AutoTokenizer, BitNetPreTrainedModel, BitNetModel
+from transformers.models.bitnet.modeling_bitnet import BitNetDecoderLayer, BitNetRMSNorm, BitNetRotaryEmbedding
 import transformers.integrations.bitnet as bitnet
 from accelerate import infer_auto_device_map, dispatch_model
 import bitnet as local_bitnet
 import nvtx
 import gc
+
+from scaled_mmfree import print_system_ram
 
 bitnet.pack_weights = local_bitnet.pack_weights
 bitnet.unpack_weights = local_bitnet.unpack_weights
@@ -44,7 +48,8 @@ standard_model_config = BitNetConfig(
     tie_word_embeddings=True,
     use_cache=True,            
     vocab_size=128256,
-    quantization_config=quantization_config
+    quantization_config=quantization_config, 
+    device="cuda"
 )
 
 scaled_model_config = BitNetConfig(
@@ -65,7 +70,8 @@ scaled_model_config = BitNetConfig(
     tie_word_embeddings=True,
     use_cache=True,            
     vocab_size=128256,
-    quantization_config=quantization_config
+    quantization_config=quantization_config, 
+    device="cuda"
 )
 
 def create_custom_bitnet(model_config=standard_model_config):
@@ -83,6 +89,43 @@ def create_custom_bitnet(model_config=standard_model_config):
         model, 
         quantization_config=model_config.quantization_config
     )
+    model.cuda()
+    return model
+
+
+class ScalableBitNetModel(BitNetModel):
+    def __init__(self, config: BitNetConfig):
+        super(BitNetPreTrainedModel, self).__init__(config)
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        layers = []
+        for layer_idx in range(config.num_hidden_layers):
+            with torch.device(config.device):
+                curr_layer = BitNetDecoderLayer(config, layer_idx)
+            bitnet.replace_with_bitnet_linear(curr_layer, quantization_config=config.quantization_config, modules_to_not_convert=['parameters'])
+            layers.append(curr_layer)
+            print_system_ram(f"Ram after initalizing layer {layer_idx}")
+        self.layers = nn.ModuleList(layers)
+        self.norm = BitNetRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb = BitNetRotaryEmbedding(config=config)
+        self.gradient_checkpointing = False
+
+        # Initialize weights and apply final processing
+        self.post_init()
+class ScalableBitNetForCausalLM(BitNetForCausalLM):
+    def __init__(self, config):
+        super(BitNetPreTrainedModel, self).__init__(config)
+        self.model = ScalableBitNetModel(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        self.post_init()
+
+def create_bitnet_from_scratch(model_config=standard_model_config):
+    model = ScalableBitNetForCausalLM(model_config)
+
     model.cuda()
     return model
 
@@ -110,9 +153,29 @@ def print_bitlinear_shapes(model: torch.nn.Module):
             print(f"{name}  weight: {w_shape}  bias: {b_shape}")
     print("=== End of BitLinear dimensions ===\n")
 
+def count_total_params(model, include_bias=True):
+    """
+    Counts logical (unpacked) parameters across a model that mixes
+    standard nn.Parameters with packed BitLinear buffers.
+    """
+    BitLinearClass = local_bitnet.BitLinear
+
+    standard_params = sum(p.numel() for p in model.parameters())
+
+    bitlinear_params = 0
+    for m in model.modules():
+        if isinstance(m, BitLinearClass):
+            bitlinear_params += m.get_parameter_count()
+            if include_bias and m.bias is not None:
+                bitlinear_params += m.bias.numel()
+
+    return standard_params + bitlinear_params
+
 def main():
     model_config = standard_model_config
-    model = create_custom_bitnet(model_config=model_config)
+    print_system_ram("Before model Init")
+    model = create_bitnet_from_scratch(model_config=model_config)
+    print_system_ram("After model Init")
     prompts = [
         "Explain the concept of quantum computing.",
         "Write a short story about a space explorer.",
@@ -127,22 +190,19 @@ def main():
     inputs = tokenizer(prompts, return_tensors="pt", padding=True).to("cuda:0")
     gc.collect()
     torch.cuda.empty_cache()
-    memory_usage = torch.cuda.memory_allocated()
-    print(f"Memory Usage: {memory_usage/(1024**3)} GiB") 
-    print(f"Processing batch of {len(prompts)} prompts...")
-    print(model)
-    print_bitlinear_shapes(model)
+    # print(model)
+    # print_bitlinear_shapes(model)
 
     # Assuming 'model' is your PyTorch nn.Module instance
 
     # 1. Total parameters (including frozen/non-trainable layers)
-    total_params = sum(p.numel() for p in model.parameters())
+    total_params = count_total_params(model, include_bias=False)
 
-    # 2. Trainable parameters only (those updated by the optimizer)
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # # 2. Trainable parameters only (those updated by the optimizer)
+    # trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(f"Total Parameters: {total_params:,}")
-    print(f"Trainable Parameters: {trainable_params:,}")
+    # print(f"Trainable Parameters: {trainable_params:,}")
 
     # Inference
     with nvtx.annotate("workload", color="cyan"):
