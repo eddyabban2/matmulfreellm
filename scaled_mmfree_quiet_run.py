@@ -4,16 +4,14 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
-from transformers import AutoModelForCausalLM, logging
+from transformers import logging
 from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
 import argparse
 import nvtx
-import transformers.integrations.bitnet as bitnet
-import bitnet as local_bitnet
 import random
 import numpy as np
 import gc 
-from scaled_mmfree import create_scaled_mmfree, print_system_ram
+from scaled_mmfree import create_model_from_scratch, print_system_ram
 
 seed = 42
 torch.manual_seed(seed)
@@ -103,7 +101,7 @@ model_id="ridger/MMfreeLM-2.7B"
 print_model_config=True
 device="cuda"
 print("attempting to load model")
-model = create_scaled_mmfree(
+model = create_model_from_scratch(
     layers_multiplier=layers_multiplier,
     weight_multiplier=weight_multiplier, 
     vocab_size_multiplier=vocab_size_multiplier, 
@@ -112,6 +110,7 @@ model = create_scaled_mmfree(
     print_model_config=print_model_config, 
     device=device)
 print("finished loading model")
+print("adding nvtx hooks to every model")
 add_nvtx_hooks_to_every_module(model)
 print("warmup running")
 with nvtx.annotate("warmup", color="white"):
