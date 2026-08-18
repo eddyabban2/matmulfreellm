@@ -677,6 +677,7 @@ class FusedBitLinear(BitLinear):
         self.compressed_type = compressed_type
         self.convert_weights(device=device)
 
+    @torch.no_grad()
     def convert_weights(self, device=None):
         if(self.compressed_weights is None) and (self.cached_weights is None):
             self.cached_weights = weight_quant(self.weight)
@@ -697,6 +698,7 @@ class FusedBitLinear(BitLinear):
             case _:
                 print("Unknown compression type exiting")
                 exit()
+    @torch.no_grad()
     def compress_weights(self):
         self.compressed_weights = pack_weights(self.cached_weights)
         if self.test_compression: 

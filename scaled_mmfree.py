@@ -4,11 +4,15 @@ import copy
 import sys
 import random
 import gc 
+import math
 from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
 from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 from mmfreelm.ops.fusedbitnet import CompressedType
 import os
 import psutil
+from mmfreelm.models.hgrn_bit.modeling_hgrn_bit import HGRNBitModel, HGRNBitPreTrainedModel, HGRNBitBlock
+from mmfreelm.ops.fusedbitnet import FusedBitLinear
+from mmfreelm.modules import RMSNorm
 
 def create_scaled_mmfree(
         layers_multiplier=1, 
@@ -171,6 +175,117 @@ def create_scaled_model_from_config(
     torch.cuda.empty_cache()
     return model
 
+class ScalableHGRNBitForCausalLM(HGRNBitForCausalLM):
+    def __init__(self, config):
+            super(HGRNBitForCausalLM, self).__init__(config)
+            self.model = ScalableHGRNBitModel(config)
+            self.vocab_size = config.vocab_size
+            self.lm_head = FusedBitLinear(config.hidden_size, config.vocab_size, bias=False)
+    
+class ScalableHGRNBitModel(HGRNBitModel):
+    def __init__(self, config: HGRNBitConfig):
+        super(HGRNBitModel, self).__init__(config)
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.init_weights(self.embeddings)
+        if config.use_lower_bound:
+            self.lower_bounds = nn.Parameter(torch.zeros(config.num_hidden_layers, config.hidden_size))
+        layers = []
+        for layer_idx in range(config.num_hidden_layers):
+            curr_layer = HGRNBitBlock(config, layer_idx)
+            self.init_weights(curr_layer.attn.i_proj)
+            self.init_weights(curr_layer.attn.f_proj)
+            self.init_weights(curr_layer.attn.g_proj)
+            self.init_weights(curr_layer.attn.o_proj)
+
+            self.init_weights(curr_layer.mlp.gate_proj)
+            self.init_weights(curr_layer.mlp.down_proj)
+            layers.append(curr_layer)
+            del curr_layer
+            curr_layer = None 
+            gc.collect()
+            torch.cuda.empty_cache()
+            layers[-1].set_compression(config.compressed_type, config.device, convert_weights=True)
+            if(config.print_model_config):
+                print_system_ram(f"Allocating layer {layer_idx} from scratch")
+        self.layers = nn.ModuleList(layers)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.init_weights(self.norm)
+        self.gradient_checkpointing = False
+
+    def init_weights(
+            self,
+            module: nn.Module,
+            rescale_prenorm_residual: bool = True,
+            num_residuals_per_layer: int = 2,
+        ):
+            if isinstance(module, (nn.Linear, nn.Conv1d, FusedBitLinear)):
+                # Slightly different from the TF version which uses truncated_normal for initialization
+                # cf https://github.com/pytorch/pytorch/pull/5617
+                nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+                if module.padding_idx is not None:
+                    module.weight.data[module.padding_idx].zero_()
+    
+            if rescale_prenorm_residual:
+                for name, p in module.named_parameters():
+                    if name in ["o_proj.weight", "down_proj.weight"]:
+                        with torch.no_grad():
+                            p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
+
+def create_model_from_scratch(
+        layers_multiplier=1, 
+        weight_multiplier=1, 
+        vocab_size_multiplier=1, 
+        weight_compression=False, 
+        print_model_config=False, 
+        model_id="ridger/MMfreeLM-2.7B", 
+        device="cuda"):
+    compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
+    
+    config = HGRNBitConfig(
+        vocab_size = int(32000*vocab_size_multiplier),
+        hidden_size = int(2560*weight_multiplier),
+        num_hidden_layers = int(32*layers_multiplier),
+        attn_mode = "fused_recurrent",
+        num_heads = 1,
+        expand_ratio = 1,
+        use_short_conv = False,
+        conv_size = 4,
+        share_conv_kernel = True,
+        use_lower_bound = True,
+        hidden_ratio = 1,
+        intermediate_size = int(6912*weight_multiplier),
+        hidden_act = "swish",
+        max_position_embeddings = 2048,
+        rms_norm_eps = 1e-6,
+        use_cache = True,
+        pad_token_id = None,
+        bos_token_id = 1,
+        eos_token_id = 2,
+        tie_word_embeddings = False,
+        initializer_range = 0.02,
+        fuse_cross_entropy = True, 
+        model_type = "hgrn_bit", 
+        compressed_type=compression_type, 
+        device="cuda", 
+        print_model_config=print_model_config
+    )
+    previous_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float16)
+    with torch.device(device):
+        model = ScalableHGRNBitForCausalLM(config).cuda()
+    torch.set_default_dtype(previous_dtype)
+    gc.collect()
+    torch.cuda.empty_cache()
+    return model
+
 process = psutil.Process(os.getpid())
 def print_system_ram(label):
     mem_bytes = process.memory_info().rss 
@@ -188,7 +303,7 @@ def main():
     print_model_config = True
     use_weight_compression = False
     print_system_ram("System RAM Before Loading")
-    model = create_scaled_model_from_config(
+    model = create_model_from_scratch(
         layers_multiplier=layers_multiplier, 
         weight_multiplier=weight_multiplier, 
         vocab_size_multiplier=vocab_size_multiplier, 
@@ -196,6 +311,14 @@ def main():
         print_model_config=print_model_config, 
         weight_compression=use_weight_compression
     )
+    # model = create_scaled_model_from_config(
+    #     layers_multiplier=layers_multiplier, 
+    #     weight_multiplier=weight_multiplier, 
+    #     vocab_size_multiplier=vocab_size_multiplier, 
+    #     model_id=MODEL_ID, 
+    #     print_model_config=print_model_config, 
+    #     weight_compression=use_weight_compression
+    # )
     # model = create_scaled_mmfree(
     #     layers_multiplier=layers_multiplier, 
     #     weight_multiplier=weight_multiplier, 
