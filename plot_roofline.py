@@ -51,9 +51,10 @@ gpu_roofs = [
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (assuming sparsity)", "val" : 1979000},
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" :         1318000},
   # {"name" : "(V100) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" :           15700},
+  {"name" : "(rtx6000) Peak 16-Bit Floating Point Performance with Tensor Cores (no sparsity)", "val" :           5038},
   
   # {"name" : "(H100) Peak 16-Bit Floating Point Performance with Streaming Multiprocessors", "val" : 120000},
-  {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
+  # {"name" : "rtx 3090ti Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 79994.88},
   # {"name" : "Jetson Nano Orin Peak 16-Bit Floating Point Performance with Tensor Cores", "val" : 17000},
 ]
 

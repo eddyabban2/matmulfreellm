@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np 
 from matplotlib.lines import Line2D   # only needed for a custom legend (optional)
 
-GPU_MATMUL_FILE = "paper_csv/mmfree.csv"
+GPU_MATMUL_FILE = "paper_csv/old_mmfree.csv"
 GPU_BITNET_FILE = "paper_csv/bitnet.csv"
 FPGA_FILE = "paper_csv/fpga.csv"
 PROFILING_FILE = "paper_profiling/summary.csv"
@@ -21,6 +21,7 @@ BS_COL = "batch size"
 PACKING_COL = "Weight Packing"
 DEVICE_COL = "device"
 TTFT_COL = "Avg Prefill Time (s)"
+DECODE_COL = "Avg Single Deocde Time (s)"
 SEQ_LEN = "Sequence Length"
 OUT_LEN = "Output Length"
 
@@ -28,6 +29,9 @@ RIDGER_MODEL_ID = "ridger/MMfreeLM-2.7B"
 BITNET_MODEL_ID = "microsoft/bitnet-b1.58-2B-4T"
 SCALED_MMFREE_MODEL_ID = "100B MatMulFreeLM"
 SCALED_BITNET_MODEL_ID = "Scaled Up Bitnet"
+
+NAIVE_PACKING = "CompressedType.NAIVE"
+NO_PACKING = 'CompressedType.FLOAT16'
 
 V100_DEVICE_ID = "Tesla V100-SXM2-32GB"
 MULTI_V100_DEVICE_ID = "Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB,Tesla V100-SXM2-32GB"
@@ -224,19 +228,26 @@ def scaled_performance_bar_chart(scaled_matmul_gpu_df, scaled_bitnet_gpu_df):
     print(f'✅ Scaled Performance Graphs saved to {out_path}')
 
 def latency_requirements(matmul_gpu_df, fpga_df): 
-    v100_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=True)
+    extened_df = extend_dataframe(matmul_gpu_df)
+    
+    v100_packing_runtime = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=True)
     v100_packing_tps = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL, packing=True)
 
-    v100_no_packing_ttft = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=False)
+    extended_v100_packing_runtime = get_col_from_df(extened_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=True)
+    extended_v100_packing_tps = get_col_from_df(extened_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL, packing=True)
+        
+    v100_no_packing_runtime = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME, packing=False)
     v100_no_packing_tps = get_col_from_df(matmul_gpu_df, V100_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL, packing=False)
 
-    u250_ttft = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME)
+    
+    u250_runtime = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, AVG_RUNTIME)
     u250_tps = get_col_from_df(fpga_df, U250_DEVICE_ID, RIDGER_MODEL_ID, TPS_COL)
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(v100_packing_tps, v100_packing_ttft, label = "V100 Weight Packing")
-    ax.plot(v100_no_packing_tps, v100_no_packing_ttft, label = "V100 No Weight Packing")
-    ax.plot(u250_tps, u250_ttft, label = "U250")
+    ax.plot(v100_packing_tps, v100_packing_runtime, label = "V100 Weight Packing")
+    ax.plot(extended_v100_packing_tps, extended_v100_packing_runtime, label = "V100 Weight Packing", linestyle='--')
+    ax.plot(v100_no_packing_tps, v100_no_packing_runtime, label = "V100 No Weight Packing")
+    ax.plot(u250_tps, u250_runtime, label = "U250")
 
     ax.set_xlabel('Tokens per Second')
     ax.set_ylabel('End to End Latency (s)')
@@ -246,7 +257,62 @@ def latency_requirements(matmul_gpu_df, fpga_df):
     out_path="paper_graphs/latency_graph.png"
     fig.savefig(out_path, dpi=300, bbox_inches='tight')
     print(f'✅ Latency graph saved to {out_path}')
+def extend_dataframe(df):
 
+    packing_configs = [NAIVE_PACKING, NO_PACKING]
+    models = [RIDGER_MODEL_ID, BITNET_MODEL_ID, SCALED_MMFREE_MODEL_ID, SCALED_BITNET_MODEL_ID]
+    devices = [V100_DEVICE_ID, MULTI_V100_DEVICE_ID, A40_DEVICE_ID, U250_DEVICE_ID]
+    
+    # Start with base rows - get max batch size for each combination
+    base_rows = []
+    
+    for packing_config in packing_configs: 
+        for model in models: 
+            for device in devices:
+                # Filter for this combination
+                mask = (df[MODEL_COL] == model) & (df[DEVICE_COL] == device)
+                
+                if PACKING_COL in df.columns:
+                    mask &= (df[PACKING_COL] == packing_config)
+                
+                filtered = df[mask]
+                
+                if filtered.empty:
+                    continue
+                
+                # Get row with max batch size
+                max_bs_row = filtered.loc[filtered[BS_COL].idxmax()]
+                base_rows.append(max_bs_row)
+    
+    if not base_rows:
+        return pd.DataFrame()
+    
+    # Create the base dataframe
+    extended_df = pd.DataFrame(base_rows).reset_index(drop=True)
+    
+    # Generate extrapolated rows for each base row
+    all_new_rows = []
+    
+    for _, base_row in extended_df.iterrows():
+        current_bs = base_row[BS_COL]
+        multiplier = 2
+        
+        while current_bs * multiplier <= 3000:
+            new_row = base_row.copy()
+            new_row[BS_COL] = current_bs * multiplier
+            new_row[AVG_RUNTIME] *= multiplier
+            new_row[TTFT_COL] *= multiplier
+            # Recalculate TPS based on your formula
+            new_row[TPS_COL] = (new_row[BS_COL]*1000) / (new_row[TTFT_COL] + (new_row[DECODE_COL] * 999))
+            all_new_rows.append(new_row)
+            multiplier *= 2
+    
+    # Add all new rows at once
+    if all_new_rows:
+        new_df = pd.DataFrame(all_new_rows)
+        extended_df = pd.concat([extended_df, new_df], ignore_index=True)
+    extended_df.to_csv("test.csv", index=False)
+    return extended_df
 
 def runtime_fraction(profiling_df):
 
@@ -270,8 +336,6 @@ def runtime_fraction(profiling_df):
         "BitNetRMSNorm", "ReLUSquaredActivation", "BitNetRotaryEmbedding"
     ]
     sections = [section + " runtime(ns)" for section in sections]
-    print(sections)
-    print(profiling_df)
 
     # 6. Calculate 'Other runtime' so the total equals exactly 100% of workload runtime
     profiling_df['Other runtime(ns)'] = profiling_df['workload runtime(ns)'] - profiling_df[sections].sum(axis=1)
