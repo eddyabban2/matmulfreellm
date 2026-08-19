@@ -11,8 +11,6 @@ import argparse
 import subprocess
 import sys
 import time
-from pathlib import Path
-
 
 DEFAULT_SEQUENCE_LENGTHS = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024)
 
@@ -25,7 +23,7 @@ def parse_sequence_lengths(value: str) -> tuple[int, ...]:
 
 
 def build_command(args: argparse.Namespace, sequence_length: int) -> list[str]:
-    return [
+    command = [
         sys.executable,
         "-u",
         "-m",
@@ -47,6 +45,11 @@ def build_command(args: argparse.Namespace, sequence_length: int) -> list[str]:
         "--batch_samples",
         str(args.batch_samples),
     ]
+    if args.collect_power_data:
+        command.append("--collect_power_data")
+    if args.print_csv:
+        command.append("--print_csv")
+    return command
 
 
 def main() -> int:
@@ -60,6 +63,9 @@ def main() -> int:
     parser.add_argument("--min-batch-size", type=int, default=1)
     parser.add_argument("--max-batch-size", type=int, default=65536)
     parser.add_argument("--batch-samples", type=int, default=50)
+    parser.add_argument("--collect-power-data", action="store_true",
+                        help="record Zeus GPU power/energy columns in each CSV")
+    parser.add_argument("--print-csv", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

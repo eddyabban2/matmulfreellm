@@ -16,6 +16,7 @@ import csv
 from mmfreelm.benchmark.scaled_mmfree import create_scaled_model_from_config
 from analysis.generate_csv import (
     benchmark_generation,
+    csv_output_path,
     detailed_runtime_metrics,
     get_power_data,
     run_warmup,
@@ -131,8 +132,7 @@ def create_csv_data(
     first_row = True
     min_batch_power = int(args.min_batch_power)
     max_batch_power = int(args.max_batch_power)
-    from datetime import datetime
-    filename =  'outputs/csvs/scaled_mmfree_single_gpu_results-{date:%Y-%m-%d_%H:%M:%S}.csv'.format(date=datetime.now() )
+    filename = csv_output_path("scaled_mmfree_single_gpu_results")
     with open(filename, 'w') as csvfile:
         csvwriter = None  
         row = {
@@ -185,7 +185,9 @@ def create_csv_data(
                     csvwriter = csv.DictWriter(csvfile, row.keys())
                     csvwriter.writeheader()
                     first_row = False
-                csvwriter.writerow(row) 
+                csvwriter.writerow(row)
+                csvfile.flush()
+                os.fsync(csvfile.fileno()) 
             del model
             gc.collect()
             torch.cuda.empty_cache()
