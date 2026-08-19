@@ -172,7 +172,7 @@ def count_total_params(model, include_bias=True):
     return standard_params + bitlinear_params
 
 def main():
-    model_config = standard_model_config
+    model_config = scaled_model_config
     print_system_ram("Before model Init")
     model = create_bitnet_from_scratch(model_config=model_config)
     print_system_ram("After model Init")

@@ -16,7 +16,7 @@ import numpy as np
 import gc 
 
 from utils import generate_random_input_ids, generate_dataset_input_ids, add_nvtx_hooks_to_every_module
-from scaled_bitnet import scaled_model_config, standard_model_config, create_custom_bitnet
+from scaled_bitnet import scaled_model_config, standard_model_config, create_bitnet_from_scratch
 from scaled_mmfree import print_system_ram 
 
 bitnet.pack_weights = local_bitnet.pack_weights
@@ -104,24 +104,7 @@ else:
     batch = generate_random_input_ids(model_name, batch_size, seq_len)
 input_ids = batch["input_ids"].cuda()
 attention_mask = batch["attention_mask"].cuda()
-print("loading model")
-# 2. Initialize the model architecture directly from the config (uninitialized weights)
-model = AutoModelForCausalLM.from_config(scaled_model_config)
-print("initalized a temp model")
-
-bitnet.replace_with_bitnet_linear(
-    model, 
-    quantization_config=scaled_model_config.quantization_config
-)
-print("quantizing model")
-
-# 3. Load your custom state dictionary from the local file
-state_dict = torch.load('scaled_bitnet.pth', weights_only=False)
-print("loaded state dictionary")
-
-# 4. Apply the loaded weights to the model
-model.load_state_dict(state_dict)
-print("dictionary loaded into model")
+model = create_bitnet_from_scratch(scaled_model_config)
 
 # 5. Send the entire model to the GPU
 model = model.to("cuda")

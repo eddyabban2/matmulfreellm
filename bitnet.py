@@ -147,6 +147,9 @@ class BitLinear(nn.Module):
             self.bias = None
         self.compress_weights = True
         self.active_weights = None
+        self.param_count = in_features*out_features
+    def get_parameter_count(self):
+        return self.param_count
 
     @torch.compile
     def activation_quant(self, input, num_bits=8):
