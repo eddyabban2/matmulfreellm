@@ -89,13 +89,13 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         layers = []
         for layer_idx in range(layer_count):
             curr_layer = HGRNBitBlock(config, layer_idx)
-            # HGRNBitModel.init_weights(curr_layer.attn.i_proj)
-            # HGRNBitModel.init_weights(curr_layer.attn.f_proj)
-            # HGRNBitModel.init_weights(curr_layer.attn.g_proj)
-            # HGRNBitModel.init_weights(curr_layer.attn.o_proj)
+            self.init_weights(curr_layer.attn.i_proj)
+            self.init_weights(curr_layer.attn.f_proj)
+            self.init_weights(curr_layer.attn.g_proj)
+            self.init_weights(curr_layer.attn.o_proj)
 
-            # HGRNBitModel.init_weights(curr_layer.mlp.gate_proj)
-            # HGRNBitModel.init_weights(curr_layer.mlp.down_proj)
+            self.init_weights(curr_layer.mlp.gate_proj)
+            self.init_weights(curr_layer.mlp.down_proj)
             layers.append(curr_layer)
             layers[-1].set_compression(config.compressed_type, config.device, convert_weights=True)
             if(config.print_model_config):
@@ -103,6 +103,29 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         self.local_layers = nn.ModuleList(layers)
         self.local_layers.to(self.model_device)
         self.to(self.model_device)
+
+    def init_weights(
+        self,
+        module: nn.Module,
+        rescale_prenorm_residual: bool = True,
+        num_residuals_per_layer: int = 2,
+    ):
+        if isinstance(module, (nn.Linear, nn.Conv1d, FusedBitLinear)):
+            # Slightly different from the TF version which uses truncated_normal for initialization
+            # cf https://github.com/pytorch/pytorch/pull/5617
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
+        if rescale_prenorm_residual:
+            for name, p in module.named_parameters():
+                if name in ["o_proj.weight", "down_proj.weight"]:
+                    with torch.no_grad():
+                        p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
 
         
     def old_init(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
