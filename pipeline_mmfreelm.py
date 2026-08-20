@@ -13,7 +13,10 @@ from mmfreelm.models import HGRNBitForCausalLM, HGRNBitConfig
 import random
 import gc 
 from utils import generate_dataset_input_ids, create_string_from_tokens
-from mmfreelm.ops.fusedbitnet import CompressedType
+from mmfreelm.ops.fusedbitnet import CompressedType, FusedBitLinear
+from mmfreelm.models.hgrn_bit.modeling_hgrn_bit import HGRNBitModel, HGRNBitPreTrainedModel, HGRNBitBlock
+from mmfreelm.modules import RMSNorm
+from scaled_mmfree import print_system_ram
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -26,7 +29,81 @@ if __name__ == '__main__':
 
 print_deadlocking_checks = True
 class PipelineParallelMatMulFreeLM:
-    def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
+    def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, print_model_config=False):
+        self.rank = int(os.environ.get("RANK", 0))
+        self.world_size = int(os.environ.get("WORLD_SIZE", 2))
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        self.device = torch.device(f"cuda:{self.rank}")
+        compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
+        if not dist.is_initialized():
+            timeout = timedelta(seconds=600)
+            torch.cuda.set_device(self.local_rank)
+            self.device = torch.device(f"cuda:{self.local_rank}")
+            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
+        config = HGRNBitConfig(
+            vocab_size = int(32000*vocab_size_multiplier),
+            hidden_size = int(2560*weight_multiplier),
+            num_hidden_layers = int(32*layers_multiplier),
+            attn_mode = "fused_recurrent",
+            num_heads = 1,
+            expand_ratio = 1,
+            use_short_conv = False,
+            conv_size = 4,
+            share_conv_kernel = True,
+            use_lower_bound = True,
+            hidden_ratio = 1,
+            intermediate_size = int(6912*weight_multiplier),
+            hidden_act = "swish",
+            max_position_embeddings = 2048,
+            rms_norm_eps = 1e-6,
+            use_cache = True,
+            pad_token_id = None,
+            bos_token_id = 1,
+            eos_token_id = 2,
+            tie_word_embeddings = False,
+            initializer_range = 0.02,
+            fuse_cross_entropy = True, 
+            model_type = "hgrn_bit", 
+            compressed_type=compression_type, 
+            device=self.device, 
+            print_model_config=print_model_config
+        )
+        self.embeddings = None
+        self.norm = None
+        self.lm_head = None
+        if self.rank == 0:
+            self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, config.padding_idx).to(self.device)
+            nn.init.uniform_(self.embeddings.weight, a=-1, b=1)
+        if self.rank == self.world_size - 1:
+            self.lm_head = FusedBitLinear(config.hidden_size, config.vocab_size, bias=False)
+            self.lm_head.compressed_type = config.compressed_type
+            self.lm_head.convert_weights(device=config.device)
+            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        layer_count = config.num_hidden_layers // self.world_size
+        if self.rank == self.world_size-1:
+            remainder = config.num_hidden_layers % self.world_size
+            if remainder > 0:
+                print(f"Warning layer count: {config.num_hidden_layers} does not evenly go into world size: {self.world_size}. Last Layer will have {remainder} more rows than others")
+            layer_count += remainder
+        layers = []
+        for layer_idx in range(layer_count):
+            curr_layer = HGRNBitBlock(config, layer_idx)
+            HGRNBitModel.init_weights(curr_layer.attn.i_proj)
+            HGRNBitModel.init_weights(curr_layer.attn.f_proj)
+            HGRNBitModel.init_weights(curr_layer.attn.g_proj)
+            HGRNBitModel.init_weights(curr_layer.attn.o_proj)
+
+            HGRNBitModel.init_weights(curr_layer.mlp.gate_proj)
+            HGRNBitModel.init_weights(curr_layer.mlp.down_proj)
+            layers.append(curr_layer)
+            layers[-1].set_compression(config.compressed_type, config.device, convert_weights=True)
+            if(config.print_model_config):
+                print_system_ram(f"Allocating layer {layer_idx} from scratch")
+        self.local_layers = nn.ModuleList(layers)
+        self.local_layers.to(self.device)
+
+        
+    def old_init(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
         if vocab_size_multiplier < 1:
             sys.exit("Vocab multiplier's smaller than 1 are unsupported")
         self.rank = int(os.environ.get("RANK", 0))
@@ -313,12 +390,12 @@ class PipelineParallelMatMulFreeLM:
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 0.5
-    weight_multiplier = 0.5
-    vocab_size_multiplier = 4
+    layers_multiplier = 0.25
+    weight_multiplier = 0.25
+    vocab_size_multiplier = 1
     print_model_config = True
     use_weight_compression = False
-    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, model_id=MODEL_ID, print_model_config=print_model_config, weight_compression=use_weight_compression)
+    pipeline_model = PipelineParallelMatMulFreeLM(layers_multiplier=layers_multiplier, weight_multiplier=weight_multiplier, vocab_size_multiplier=vocab_size_multiplier, print_model_config=print_model_config, weight_compression=use_weight_compression)
     memory_bytes = torch.cuda.memory_allocated()
     memory_gb = memory_bytes / (1024 ** 3)
     print(f"GPU memory usage: {memory_gb:.2f} GB")
