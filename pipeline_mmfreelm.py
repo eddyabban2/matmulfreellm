@@ -28,18 +28,18 @@ if __name__ == '__main__':
     mp.set_start_method('spawn')
 
 print_deadlocking_checks = True
-class PipelineParallelMatMulFreeLM:
+class PipelineParallelMatMulFreeLM(HGRNBitModel):
     def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, print_model_config=False):
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        self.device = torch.device(f"cuda:{self.rank}")
+        self.model_device = torch.device(f"cuda:{self.rank}")
         compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
         if not dist.is_initialized():
             timeout = timedelta(seconds=600)
             torch.cuda.set_device(self.local_rank)
-            self.device = torch.device(f"cuda:{self.local_rank}")
-            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
+            self.model_device = torch.device(f"cuda:{self.local_rank}")
+            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout) 
         config = HGRNBitConfig(
             vocab_size = int(32000*vocab_size_multiplier),
             hidden_size = int(2560*weight_multiplier),
@@ -65,14 +65,15 @@ class PipelineParallelMatMulFreeLM:
             fuse_cross_entropy = True, 
             model_type = "hgrn_bit", 
             compressed_type=compression_type, 
-            device=self.device, 
+            device=self.model_device, 
             print_model_config=print_model_config
         )
+        super(HGRNBitModel, self).__init__(config)
         self.embeddings = None
         self.norm = None
         self.lm_head = None
         if self.rank == 0:
-            self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, config.padding_idx).to(self.device)
+            self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size).to(self.model_device)
             nn.init.uniform_(self.embeddings.weight, a=-1, b=1)
         if self.rank == self.world_size - 1:
             self.lm_head = FusedBitLinear(config.hidden_size, config.vocab_size, bias=False)
@@ -88,19 +89,20 @@ class PipelineParallelMatMulFreeLM:
         layers = []
         for layer_idx in range(layer_count):
             curr_layer = HGRNBitBlock(config, layer_idx)
-            HGRNBitModel.init_weights(curr_layer.attn.i_proj)
-            HGRNBitModel.init_weights(curr_layer.attn.f_proj)
-            HGRNBitModel.init_weights(curr_layer.attn.g_proj)
-            HGRNBitModel.init_weights(curr_layer.attn.o_proj)
+            # HGRNBitModel.init_weights(curr_layer.attn.i_proj)
+            # HGRNBitModel.init_weights(curr_layer.attn.f_proj)
+            # HGRNBitModel.init_weights(curr_layer.attn.g_proj)
+            # HGRNBitModel.init_weights(curr_layer.attn.o_proj)
 
-            HGRNBitModel.init_weights(curr_layer.mlp.gate_proj)
-            HGRNBitModel.init_weights(curr_layer.mlp.down_proj)
+            # HGRNBitModel.init_weights(curr_layer.mlp.gate_proj)
+            # HGRNBitModel.init_weights(curr_layer.mlp.down_proj)
             layers.append(curr_layer)
             layers[-1].set_compression(config.compressed_type, config.device, convert_weights=True)
             if(config.print_model_config):
                 print_system_ram(f"Allocating layer {layer_idx} from scratch")
         self.local_layers = nn.ModuleList(layers)
-        self.local_layers.to(self.device)
+        self.local_layers.to(self.model_device)
+        self.to(self.model_device)
 
         
     def old_init(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, model_id="ridger/MMfreeLM-2.7B", print_model_config=False):
@@ -112,10 +114,10 @@ class PipelineParallelMatMulFreeLM:
         if not dist.is_initialized():
             timeout = timedelta(seconds=600)
             torch.cuda.set_device(self.local_rank)
-            self.device = torch.device(f"cuda:{self.local_rank}")
-            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.device, timeout=timeout) 
+            self.model_device = torch.device(f"cuda:{self.local_rank}")
+            dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout) 
         dist.barrier()
-        self.device = torch.device(f"cuda:{self.rank}")
+        self.model_device = torch.device(f"cuda:{self.rank}")
 
         self.config = HGRNBitConfig.from_pretrained(model_id)
         self.num_layers = self.config.num_hidden_layers
@@ -140,7 +142,7 @@ class PipelineParallelMatMulFreeLM:
         
         if self.rank == 0:
             if weight_multiplier == 1 and vocab_size_multiplier == 1: 
-                self.embeddings = full_model.model.embeddings.to(self.device)
+                self.embeddings = full_model.model.embeddings.to(self.model_device)
             else: 
                 hidden_size = int(2560*weight_multiplier)
                 vocab_size = int(full_model.vocab_size*vocab_size_multiplier)
@@ -148,12 +150,12 @@ class PipelineParallelMatMulFreeLM:
                     num_embeddings=vocab_size, 
                     embedding_dim=hidden_size, 
                     padding_idx=full_model.model.padding_idx, 
-                    device=self.device)
+                    device=self.model_device)
                 nn.init.uniform_(self.embeddings.weight, a=-1, b=1)
                 self.embeddings.to(torch.float16)
         if self.rank == self.world_size - 1:
-            self.norm = full_model.model.norm.to(self.device)
-            self.lm_head = full_model.lm_head.to(self.device)
+            self.norm = full_model.model.norm.to(self.model_device)
+            self.lm_head = full_model.lm_head.to(self.model_device)
             if weight_multiplier != 1 or vocab_size_multiplier != 1:
                 self.norm.increase_size(weight_multiplier)
                 self.lm_head.increase_size(weight_multiplier, vocab_size_multiplier, compressed_type=weight_compression)
@@ -181,7 +183,7 @@ class PipelineParallelMatMulFreeLM:
                 layer.mlp_norm.increase_size(weight_multiplier)
                 layer.attn.g_norm.increase_size(weight_multiplier)
 
-        self.local_layers.to(self.device)
+        self.local_layers.to(self.model_device)
         self.past_key_values_dict = {}
         del full_model
         torch.cuda.empty_cache()
@@ -209,28 +211,28 @@ class PipelineParallelMatMulFreeLM:
                 assert input_ids is not None, "Rank 0 requires input_ids"
                 hidden_states = self.embeddings(input_ids)
             else:
-                shape_tensor = torch.zeros(3, dtype=torch.int64, device=self.device)
+                shape_tensor = torch.zeros(3, dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] waiting for hidden state shape tensor from {self.rank-1}")
                 dist.recv(shape_tensor, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] got hidden state shape tensor from {self.rank-1}")
                 hidden_states = torch.zeros(
-                    tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.device
+                    tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.model_device
                 )
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] waiting for hidden states tensor from {self.rank-1}")
                 dist.recv(hidden_states, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
-                mask_shape = torch.zeros(2, dtype=torch.int64, device=self.device)
+                mask_shape = torch.zeros(2, dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] waiting for attention mask shape tensor from {self.rank-1}")
                 dist.recv(mask_shape, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
                 attention_mask = torch.zeros(
-                    tuple(mask_shape.tolist()), dtype=torch.long, device=self.device
+                    tuple(mask_shape.tolist()), dtype=torch.long, device=self.model_device
                 )
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] waiting for attention mask tensor from {self.rank-1}")
@@ -240,7 +242,7 @@ class PipelineParallelMatMulFreeLM:
 
             if not is_prefill and attention_mask is not None:
                 attention_mask = torch.ones(
-                    (hidden_states.shape[0], 1), dtype=torch.long, device=self.device
+                    (hidden_states.shape[0], 1), dtype=torch.long, device=self.model_device
                 )
             mb_past_kvs = self.past_key_values_dict.get(mb_id, None)
             new_past_key_values = []
@@ -260,7 +262,7 @@ class PipelineParallelMatMulFreeLM:
             self.past_key_values_dict[mb_id] = new_past_key_values
 
             if self.rank < self.world_size - 1:
-                shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.device)
+                shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] sending shape and hidden to rank {self.rank+1}")
                 dist.send(shape_tensor, dst=self.rank + 1)
@@ -271,9 +273,9 @@ class PipelineParallelMatMulFreeLM:
                     attention_mask = torch.ones(
                         (hidden_states.shape[0], hidden_states.shape[1]),
                         dtype=torch.long,
-                        device=self.device,
+                        device=self.model_device,
                     )
-                mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.device)
+                mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] sending attention mask shape and attention mask to rank {self.rank+1}")
                 dist.send(mask_shape, dst=self.rank + 1)
@@ -296,7 +298,7 @@ class PipelineParallelMatMulFreeLM:
         num_mbs_tensor = torch.tensor(
             [len(micro_batches) if self.rank == 0 else 0],
             dtype=torch.int64,
-            device=self.device,
+            device=self.model_device,
         )
         if print_deadlocking_checks:
             print(f"[{self.rank}] broadcasting number of microbatches {num_mbs_tensor}")
@@ -313,13 +315,13 @@ class PipelineParallelMatMulFreeLM:
         for mb_id in range(num_mbs):
             if self.rank == 0:
                 mb = micro_batches[mb_id]
-                current_mb_inputs[mb_id] = mb["input_ids"].to(self.device)
-                current_mb_masks[mb_id] = mb["attention_mask"].to(self.device)
+                current_mb_inputs[mb_id] = mb["input_ids"].to(self.model_device)
+                current_mb_masks[mb_id] = mb["attention_mask"].to(self.model_device)
                 bs = mb["input_ids"].shape[0]
             else:
                 bs = 0
 
-            bs_tensor = torch.tensor([bs], dtype=torch.int64, device=self.device)
+            bs_tensor = torch.tensor([bs], dtype=torch.int64, device=self.model_device)
             if print_deadlocking_checks:
                 print(f"[{self.rank}] broadcasting batch size tensor {num_mbs_tensor}")
             dist.broadcast(bs_tensor, src=0)
@@ -353,7 +355,7 @@ class PipelineParallelMatMulFreeLM:
                     if bc_active:
                         
                         mb_bs = batch_sizes[broadcasting_mb_id]
-                        next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.device)
+                        next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.model_device)
                         if self.rank == self.world_size - 1:
                             assert logits is not None, (
                                 f"Rank {self.rank}: expected logits for mb {broadcasting_mb_id} at step {step}"
