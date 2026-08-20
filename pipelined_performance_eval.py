@@ -158,7 +158,7 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         window_key = "generate pipeline"
 
     print("running warmup")
-    pipelined_model.generate_pipelined(micro_batches[0:world_size], max_new_tokens=1)
+    pipelined_model.generate_pipelined(micro_batches[0:world_size+1], max_new_tokens=world_size)
     print("finished warmup")
     row["Estimated Memory Usage Per GPU Memory Usage (GB)"] = (torch.cuda.memory_allocated())/(1024**3)
     row["Estimated Total Memory Usage(GB)"] = (torch.cuda.memory_allocated()*world_size)/(1024**3)
@@ -280,7 +280,8 @@ def create_csv_data(
                 weight_multiplier=weight_multiplier,
                 layers_multiplier=layers_multiplier, 
                 vocab_size_multiplier=vocab_multiplier, 
-                weight_compression=weight_compression)  
+                weight_compression=weight_compression, 
+                print_model_config=True)  
             memory_usage = 0
             for device in range(world_size):
                 print(f'Memory Allocated on Device: {device}: {(torch.cuda.memory_allocated(device=device))/(1024**3)}')

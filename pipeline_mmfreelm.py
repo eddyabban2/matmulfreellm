@@ -30,13 +30,14 @@ if __name__ == '__main__':
 print_deadlocking_checks = True
 class PipelineParallelMatMulFreeLM(HGRNBitModel):
     def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, print_model_config=False):
+        torch.set_default_dtype(torch.float16)
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         self.model_device = torch.device(f"cuda:{self.rank}")
         compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
         if not dist.is_initialized():
-            timeout = timedelta(seconds=600)
+            timeout = timedelta(seconds=180)
             torch.cuda.set_device(self.local_rank)
             self.model_device = torch.device(f"cuda:{self.local_rank}")
             dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout) 
@@ -98,7 +99,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
             self.init_weights(curr_layer.mlp.down_proj)
             layers.append(curr_layer)
             layers[-1].set_compression(config.compressed_type, config.device, convert_weights=True)
-            if(config.print_model_config):
+            if(print_model_config):
                 print_system_ram(f"Allocating layer {layer_idx} from scratch")
         self.local_layers = nn.ModuleList(layers)
         self.local_layers.to(self.model_device)
@@ -250,10 +251,12 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
                 mask_shape = torch.zeros(2, dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
+                    print(f"[{self.rank}] waiting for attention mask shape tensor: {mask_shape}")
                     print(f"[{self.rank}] waiting for attention mask shape tensor from {self.rank-1}")
                 dist.recv(mask_shape, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
+                    print(f"[{self.rank}] recieved attention mask shape tensor: {mask_shape}")
                 attention_mask = torch.zeros(
                     tuple(mask_shape.tolist()), dtype=torch.long, device=self.model_device
                 )
@@ -265,11 +268,12 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
             if not is_prefill and attention_mask is not None:
                 attention_mask = torch.ones(
-                    (hidden_states.shape[0], 1), dtype=torch.long, device=self.model_device
+                    (hidden_states.shape[0], hidden_states.shape[1]), dtype=torch.long, device=self.model_device
                 )
             mb_past_kvs = self.past_key_values_dict.get(mb_id, None)
             new_past_key_values = []
-            
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] Iterating over layers")
             for idx, layer in enumerate(self.local_layers):
                 layer_past = mb_past_kvs[idx] if mb_past_kvs is not None else None
                 outputs = layer(
@@ -282,8 +286,12 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 )
                 hidden_states = outputs[0] if isinstance(outputs, tuple) else outputs
                 new_past_key_values.append(outputs[1])
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] Iterated over layer {idx}")
             self.past_key_values_dict[mb_id] = new_past_key_values
-
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] hidden_states_dtype: {hidden_states.dtype}")
+                print(f"[{self.rank}] hidden_states shape: {hidden_states.shape}")
             if self.rank < self.world_size - 1:
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
@@ -293,6 +301,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] sent shape and hidden to rank {self.rank+1}")
                 if attention_mask is None:
+                    print(f"[{self.rank}] Attention mask was None initalizing a mask")
                     attention_mask = torch.ones(
                         (hidden_states.shape[0], hidden_states.shape[1]),
                         dtype=torch.long,
@@ -300,13 +309,15 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     )
                 mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
+                    print(f"[{self.rank}] Sending attnetion mask shape: {mask_shape}")
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] sending mask shape {mask_shape}")
                     print(f"[{self.rank}] sending attention mask shape and attention mask to rank {self.rank+1}")
                 dist.send(mask_shape, dst=self.rank + 1)
                 dist.send(attention_mask, dst=self.rank + 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] sent attention mask shape and attention mask to rank {self.rank+1}")
                 return None
-
             hidden_states = self.norm(hidden_states)
             logits = self.lm_head(hidden_states)
             return logits
@@ -328,7 +339,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         dist.broadcast(num_mbs_tensor, src=0)
         if print_deadlocking_checks:
             print(f"[{self.rank}] finished broadcasting number of microbatches {num_mbs_tensor}")
-        num_mbs = num_mbs_tensor.item() 
+        num_mbs = num_mbs_tensor.item()
 
         all_generated_tokens = {mb_id: [] for mb_id in range(num_mbs)}
         current_mb_inputs: dict = {}
@@ -346,11 +357,15 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
             bs_tensor = torch.tensor([bs], dtype=torch.int64, device=self.model_device)
             if print_deadlocking_checks:
-                print(f"[{self.rank}] broadcasting batch size tensor {num_mbs_tensor}")
+                print(f"[{self.rank}] broadcasting batch size tensor {bs_tensor}")
             dist.broadcast(bs_tensor, src=0)
             if print_deadlocking_checks:
-                print(f"[{self.rank}] finished broadcasting batch size tensor {num_mbs_tensor}")
+                print(f"[{self.rank}] finished broadcasting batch size tensor {bs_tensor}")
             batch_sizes[mb_id] = bs_tensor.item()
+        if self.rank == 0:
+            print(f"[{self.rank}] Attention Masks:")
+            for key, value in current_mb_masks.items():
+                print(f"[{self.rank}] \tmb_id: {key} mask: {value}")
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
             # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
@@ -361,11 +376,18 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
-
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] on step {step} active: {active}")
                     logits = None
                     if active:
-                        inp = current_mb_inputs.get(mb_id) if self.rank == 0 else None
-                        mask = current_mb_masks.get(mb_id) if (self.rank == 0 and is_prefill) else None
+                        if self.rank == 0:
+                            print(f"[{self.rank}] Attention Masks in loop:")
+                            for key, value in current_mb_masks.items():
+                                print(f"[{self.rank}] \tmb_id: {key} mask: {value}")
+                        inp = current_mb_inputs[mb_id] if self.rank == 0 else None
+                        mask = current_mb_masks[mb_id] if (self.rank == 0 and step == mb_id) else None
+                        if print_deadlocking_checks:
+                            print(f"[{self.rank}] passing mask {mask}")
                         logits = self.pipelined_forward_step(
                             mb_id=mb_id,
                             input_ids=inp,
@@ -375,6 +397,8 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
                     broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
                     bc_active = step >= self.world_size - 1
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] on step {step} bc_active: {bc_active}")
                     if bc_active:
                         
                         mb_bs = batch_sizes[broadcasting_mb_id]
@@ -402,7 +426,6 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         else:
             with nvtx.annotate("pipelined_prefill", color="blue"):
                 generate_token_loop(True, 1)
-
             with nvtx.annotate("pipelined_decode", color="green"):
                 generate_token_loop(False, max_new_tokens-1)
 
