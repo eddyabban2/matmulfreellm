@@ -414,9 +414,46 @@ def set_bitnet_compression(compression, model):
         layer.mlp.up_proj.compress_weights = compression
         layer.mlp.down_proj.compress_weights = compression
 
+def resolve_packing_modes(packing_arg, default_modes):
+    """Parse --packing names into CompressedType values (aliases supported)."""
+    if not packing_arg:
+        return list(default_modes)
+    aliases = {
+        "naive": CompressedType.NAIVE,
+        "packed_2bit": CompressedType.NAIVE,
+        "packed2bit": CompressedType.NAIVE,
+        "float16": CompressedType.FLOAT16,
+        "fp16": CompressedType.FLOAT16,
+        "tq1_0": CompressedType.TQ1_0,
+        "tq1": CompressedType.TQ1_0,
+        "tq2_0": CompressedType.TQ2_0,
+        "tq2": CompressedType.TQ2_0,
+        "int8": CompressedType.INT8,
+        "fp4": CompressedType.FP4,
+    }
+    modes = []
+    for raw in packing_arg.split(","):
+        key = raw.strip().lower()
+        if not key:
+            continue
+        if key not in aliases:
+            raise ValueError(
+                f"Unknown packing mode {raw!r}; choose from {sorted(set(aliases))}"
+            )
+        modes.append(aliases[key])
+    if not modes:
+        raise ValueError("--packing was empty")
+    return modes
+
+
 def get_batch_sizes():
     if args.batch_sampling == "powers-of-two":
-        return [2 ** power for power in range(int(args.min_batch_power), int(args.max_batch_power))]
+        # Inclusive range: --min_batch_power 3 --max_batch_power 5 → [8, 16, 32]
+        lo = int(args.min_batch_power)
+        hi = int(args.max_batch_power)
+        if hi < lo:
+            raise ValueError("max_batch_power must be >= min_batch_power")
+        return [2 ** power for power in range(lo, hi + 1)]
 
     min_size = int(args.min_batch_size)
     max_size = int(args.max_batch_size)
@@ -470,9 +507,17 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
         if model_name == "ridger/MMfreeLM-2.7B":
             from mmfreelm.packed_loader import load_packed_hgrn
 
-            compression_modes = [True]
+            # Packed loader currently materializes legacy 2-bit packs only.
+            default_modes = [CompressedType.NAIVE]
         else:
-            compression_modes = [CompressedType.FLOAT16, CompressedType.NAIVE]
+            default_modes = [
+                CompressedType.FLOAT16,
+                CompressedType.NAIVE,
+                CompressedType.TQ2_0,
+                CompressedType.TQ1_0,
+            ]
+        compression_modes = resolve_packing_modes(getattr(args, "packing", None), default_modes)
+        print(f"\tPacking modes: {[m.label for m in compression_modes]}")
 
         for packed in compression_modes:
             if model_name == "ridger/MMfreeLM-2.7B":
@@ -486,7 +531,9 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                 set_ridger_compression(packed, model)
             if "bitnet" in model_name:
                 set_bitnet_compression(packed, model)
-            row["Weight Packing"] = packed
+            row["Weight Packing"] = (
+                packed.label if isinstance(packed, CompressedType) else packed
+            )
             run_warmup(model, model_name)
             gc.collect()
             torch.cuda.empty_cache()
@@ -647,6 +694,15 @@ if __name__ == "__main__":
         action='store_true',
         default=False,
         help="changes whether we collect power data"
+    )
+
+    parser.add_argument(
+        "--packing",
+        default=None,
+        help=(
+            "comma-separated packing modes to sweep "
+            "(float16,packed_2bit,tq2_0,tq1_0); default = all for the model"
+        ),
     )
 
     args = parser.parse_args()

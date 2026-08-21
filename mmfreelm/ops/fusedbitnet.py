@@ -11,7 +11,11 @@ import nvtx
 
 from mmfreelm.modules import RMSNorm
 from mmfreelm.utils import contiguous
-from enum import Enum
+from mmfreelm.ops.ternary_packing import (
+    CompressedType,
+    pack_for_type,
+    unpack_for_type,
+)
 import gc
 
 
@@ -619,12 +623,6 @@ class BitLinear(nn.Linear):
 
             return y
 
-class CompressedType(Enum):
-    NAIVE = 1
-    FP4 = 2
-    INT8 = 3
-    FLOAT16 = 4
-
 class FusedBitLinear(BitLinear):
     """
     A custom linear layer that applies quantization on both activations and weights.
@@ -646,7 +644,10 @@ class FusedBitLinear(BitLinear):
         self.cached_scale = None
         self.compressed_weights = None
         self.compressed_type = CompressedType.NAIVE
-        self.test_compression = False 
+        self._packed_orig_shape = None
+        self._packed_orig_numel = None
+        self.test_compression = False
+
     def _apply(self, fn):
         super()._apply(fn)
         if hasattr(self, 'compressed_weights') and self.compressed_weights is not None:
@@ -659,18 +660,18 @@ class FusedBitLinear(BitLinear):
         weight_dimension_out, weight_dimension_in = self.weight.shape
         weight_dimension_in *= in_multiplier
         weight_dimension_out *= out_multiplier
-        device = self.weight.device 
+        device = self.weight.device
         dtype = self.weight.dtype
         del self.weight
         torch.cuda.empty_cache()
         gc.collect()
         self.cached_weights = torch.randint(
-            -1, 2, 
-            (int(weight_dimension_out), int(weight_dimension_in)), 
-            device='cpu', 
+            -1, 2,
+            (int(weight_dimension_out), int(weight_dimension_in)),
+            device='cpu',
             dtype=dtype
         )
-        self.cached_scale = torch.rand(1)[0] 
+        self.cached_scale = torch.rand(1)[0]
         self.in_features = int(weight_dimension_in)
         self.out_features = int(weight_dimension_out)
         self.norm.increase_size(in_multiplier, device=device)
@@ -678,14 +679,14 @@ class FusedBitLinear(BitLinear):
         self.convert_weights(device=device)
 
     def convert_weights(self, device=None):
-        if(self.compressed_weights == None and self.cached_weights == None):
+        if self.compressed_weights is None and self.cached_weights is None:
             self.cached_weights = weight_quant(self.weight)
             self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
             del self.weight
+        if device is None and self.cached_weights is not None:
+            device = self.cached_weights.device
         match self.compressed_type:
-            case CompressedType.NAIVE:
-                if device == None:
-                    device = self.cached_weights.device
+            case CompressedType.NAIVE | CompressedType.TQ1_0 | CompressedType.TQ2_0:
                 self.compress_weights()
                 self.compressed_weights = self.compressed_weights.to(device)
             case CompressedType.FLOAT16:
@@ -695,38 +696,69 @@ class FusedBitLinear(BitLinear):
             case CompressedType.FP4:
                 self.cached_weights = self.cached_weights.to(torch.float4_e2m1fn_x2).to(device)
             case _:
-                print("Unknown compression type exiting")
-                exit()
+                raise ValueError(f"Unknown compression type: {self.compressed_type}")
+
     def compress_weights(self):
-        self.compressed_weights = pack_weights(self.cached_weights)
-        if self.test_compression: 
-            unpacked_weights = unpack_weights(self.compressed_weights, self.cached_weights.dtype)
-            if torch.equal(unpacked_weights, self.cached_weights):
-                print("Weight compression is incorrect")
-                exit()
-            else: 
-                print('Weight Compression passed')
+        src = self.cached_weights
+        # Pack on CPU to keep Jetson / low-RAM devices from peaking twice on GPU.
+        src_cpu = src.detach().to("cpu")
+        self._packed_orig_shape = tuple(src_cpu.shape)
+        self._packed_orig_numel = src_cpu.numel()
+        if self.compressed_type in (CompressedType.TQ1_0, CompressedType.TQ2_0):
+            packed = pack_for_type(src_cpu, self.compressed_type)
+        else:
+            packed = pack_weights(src_cpu.clone())
+        if self.test_compression:
+            self.compressed_weights = packed
+            unpacked_weights = self._unpack_active(src_cpu.dtype)
+            if not torch.equal(unpacked_weights.cpu(), src_cpu.to(unpacked_weights.dtype)):
+                raise RuntimeError(f"Weight compression failed for {self.compressed_type}")
+            print(f"Weight compression passed ({self.compressed_type.label})")
             del unpacked_weights
+        self.compressed_weights = packed
         self.cached_weights = None
+        del src_cpu
         torch.cuda.empty_cache()
+        gc.collect()
+
+    def _unpack_active(self, dtype: torch.dtype) -> torch.Tensor:
+        if self.compressed_type in (CompressedType.TQ1_0, CompressedType.TQ2_0):
+            return unpack_for_type(
+                self.compressed_weights,
+                dtype,
+                self.compressed_type,
+                original_shape=torch.Size(self._packed_orig_shape)
+                if self._packed_orig_shape is not None
+                else None,
+                original_numel=self._packed_orig_numel,
+            )
+        return unpack_weights(self.compressed_weights, dtype)
 
     def forward(self, x):
         with nvtx.annotate("Fused Bit Linear", color="red"):
-            if(self.compressed_weights == None and self.cached_weights == None):
+            if self.compressed_weights is None and self.cached_weights is None:
                 self.cached_weights = weight_quant(self.weight)
                 self.cached_scale = 1.0 / self.weight.abs().mean().clamp_(min=1e-5)
                 del self.weight
                 self.convert_weights()
-            active_weights = self.compressed_weights if self.compressed_type == CompressedType.NAIVE else self.cached_weights
+            if self.compressed_type.is_packed:
+                # Unpack TQ*/legacy packs here so the shared kernel stays layout-agnostic.
+                active_weights = self._unpack_active(
+                    torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else x.dtype
+                )
+                compress_weights = False
+            else:
+                active_weights = self.cached_weights
+                compress_weights = False
             return layer_norm_linear_quant_fn(
                 x,
                 self.norm.weight,
                 self.norm.bias,
                 active_weights,
                 self.bias,
-                is_rms_norm=True, 
-                scale=self.cached_scale, 
-                compress_weights=(self.compressed_type == CompressedType.NAIVE)
+                is_rms_norm=True,
+                scale=self.cached_scale,
+                compress_weights=compress_weights,
             )
 
 VALUES_PER_ITEM = 4

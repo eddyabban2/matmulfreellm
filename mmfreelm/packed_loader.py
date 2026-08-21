@@ -7,7 +7,7 @@ from accelerate import init_empty_weights
 from huggingface_hub import snapshot_download
 from safetensors import safe_open
 from mmfreelm.models import HGRNBitConfig, HGRNBitForCausalLM
-from mmfreelm.ops.fusedbitnet import FusedBitLinear, pack_weights
+from mmfreelm.ops.fusedbitnet import CompressedType, FusedBitLinear, pack_weights
 
 
 def _parent(module, key):
@@ -35,9 +35,13 @@ def load_packed_hgrn(model_id: str, device: str = "cuda", packed: bool = True):
                     ternary = (tensor * scale).round().clamp_(-1, 1)
                     module.cached_scale = scale.to(device)
                     if packed:
+                        module.compressed_type = CompressedType.NAIVE
                         module.compressed_weights = pack_weights(ternary).to(device)
+                        module._packed_orig_shape = tuple(ternary.shape)
+                        module._packed_orig_numel = ternary.numel()
                     else:
                         module.cached_weights = tensor.to(device)
+                        module.compressed_type = CompressedType.FLOAT16
                         module.use_compressed_weights = False
                     del module.weight
                 else:
