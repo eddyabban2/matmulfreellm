@@ -646,6 +646,7 @@ class FusedBitLinear(BitLinear):
         self.compressed_type = CompressedType.NAIVE
         self._packed_orig_shape = None
         self._packed_orig_numel = None
+        self._packed_unit_scale = True
         self.test_compression = False
 
     def _apply(self, fn):
@@ -717,6 +718,7 @@ class FusedBitLinear(BitLinear):
             del unpacked_weights
         self.compressed_weights = packed
         self.cached_weights = None
+        self._packed_unit_scale = bool(getattr(packed, "_mmfree_unit_scale", True))
         del src_cpu
         torch.cuda.empty_cache()
         gc.collect()
@@ -731,6 +733,7 @@ class FusedBitLinear(BitLinear):
                 if self._packed_orig_shape is not None
                 else None,
                 original_numel=self._packed_orig_numel,
+                unit_scale=self._packed_unit_scale,
             )
         return unpack_weights(self.compressed_weights, dtype)
 

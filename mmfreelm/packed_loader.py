@@ -8,6 +8,7 @@ from huggingface_hub import snapshot_download
 from safetensors import safe_open
 from mmfreelm.models import HGRNBitConfig, HGRNBitForCausalLM
 from mmfreelm.ops.fusedbitnet import CompressedType, FusedBitLinear, pack_weights
+from mmfreelm.ops.ternary_packing import pack_for_type
 
 
 def _parent(module, key):
@@ -18,8 +19,19 @@ def _parent(module, key):
 
 
 @torch.inference_mode()
-def load_packed_hgrn(model_id: str, device: str = "cuda", packed: bool = True):
-    """Load checkpoint tensors one at a time; BitLinear weights stay 2-bit packed."""
+def load_packed_hgrn(
+    model_id: str,
+    device: str = "cuda",
+    packed: bool = True,
+    compressed_type: CompressedType = CompressedType.NAIVE,
+):
+    """Load checkpoint tensors one at a time; BitLinear weights stay packed.
+
+    compressed_type selects NAIVE/PACKED_2BIT, TQ1_0, or TQ2_0 when packed=True.
+    packed=False stores FLOAT16 weights (higher memory).
+    """
+    if not packed:
+        compressed_type = CompressedType.FLOAT16
     snapshot = Path(snapshot_download(model_id))
     index = json.loads((snapshot / "model.safetensors.index.json").read_text())
     config = HGRNBitConfig.from_pretrained(snapshot)
@@ -34,14 +46,19 @@ def load_packed_hgrn(model_id: str, device: str = "cuda", packed: bool = True):
                     scale = 1.0 / tensor.abs().mean().clamp_(min=1e-5)
                     ternary = (tensor * scale).round().clamp_(-1, 1)
                     module.cached_scale = scale.to(device)
-                    if packed:
-                        module.compressed_type = CompressedType.NAIVE
-                        module.compressed_weights = pack_weights(ternary).to(device)
+                    module.compressed_type = compressed_type
+                    if compressed_type.is_packed:
+                        if compressed_type in (CompressedType.TQ1_0, CompressedType.TQ2_0):
+                            packed_w = pack_for_type(ternary, compressed_type)
+                        else:
+                            packed_w = pack_weights(ternary.clone())
+                        module.compressed_weights = packed_w.to(device)
                         module._packed_orig_shape = tuple(ternary.shape)
                         module._packed_orig_numel = ternary.numel()
+                        module._packed_unit_scale = True
                     else:
+                        # Unpacked fp16 checkpoint weights (not ternary).
                         module.cached_weights = tensor.to(device)
-                        module.compressed_type = CompressedType.FLOAT16
                         module.use_compressed_weights = False
                     del module.weight
                 else:

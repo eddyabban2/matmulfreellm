@@ -504,29 +504,31 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
             'gpu_resource': os.environ.get('GPU_RESOURCE', ''),
         }
         print(f"Collecting data for model: {model_name}")
-        if model_name == "ridger/MMfreeLM-2.7B":
-            from mmfreelm.packed_loader import load_packed_hgrn
-
-            # Packed loader currently materializes legacy 2-bit packs only.
-            default_modes = [CompressedType.NAIVE]
-        else:
-            default_modes = [
-                CompressedType.FLOAT16,
-                CompressedType.NAIVE,
-                CompressedType.TQ2_0,
-                CompressedType.TQ1_0,
-            ]
+        # All ridger BitLinear models: sweep FLOAT16 + ternary packs by default.
+        default_modes = [
+            CompressedType.FLOAT16,
+            CompressedType.NAIVE,
+            CompressedType.TQ2_0,
+            CompressedType.TQ1_0,
+        ]
         compression_modes = resolve_packing_modes(getattr(args, "packing", None), default_modes)
         print(f"\tPacking modes: {[m.label for m in compression_modes]}")
+        use_stream_loader = model_name == "ridger/MMfreeLM-2.7B"
 
         for packed in compression_modes:
-            if model_name == "ridger/MMfreeLM-2.7B":
-                model = load_packed_hgrn(model_name)
-            else:
+            if use_stream_loader:
+                from mmfreelm.packed_loader import load_packed_hgrn
+
+                # Streamed load keeps 2.7B under Jetson / low-RAM ceilings.
+                model = load_packed_hgrn(
+                    model_name,
+                    packed=packed.is_packed,
+                    compressed_type=packed,
+                )            else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True
                 ).cuda()
-            if model_name != "ridger/MMfreeLM-2.7B" and "ridger" in model_name:
+            if (not use_stream_loader) and "ridger" in model_name:
                 model = model.half()
                 set_ridger_compression(packed, model)
             if "bitnet" in model_name:
