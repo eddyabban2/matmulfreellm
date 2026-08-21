@@ -524,7 +524,8 @@ def create_csv_data(sequence_length, iters, max_new_tokens, model_name='ridger/M
                     model_name,
                     packed=packed.is_packed,
                     compressed_type=packed,
-                )            else:
+                )
+            else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True
                 ).cuda()
