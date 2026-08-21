@@ -136,7 +136,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         self.world_size = int(os.environ.get("WORLD_SIZE", 2))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         if not dist.is_initialized():
-            timeout = timedelta(seconds=600)
+            timeout = timedelta(seconds=180)
             torch.cuda.set_device(self.local_rank)
             self.model_device = torch.device(f"cuda:{self.local_rank}")
             dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout) 
@@ -237,10 +237,13 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
             else:
                 shape_tensor = torch.zeros(3, dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
+                    print(f"[{self.rank}] Recieving hidden states and information to [{self.rank-1}] for micro batch: {mb_id}")
                     print(f"[{self.rank}] waiting for hidden state shape tensor from {self.rank-1}")
+                    print(f"[{self.rank}] Expecting shape tensor to fit in {shape_tensor}")
                 dist.recv(shape_tensor, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] got hidden state shape tensor from {self.rank-1}")
+                    print(f"[{self.rank}] hidden state shape {shape_tensor}")
                 hidden_states = torch.zeros(
                     tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.model_device
                 )
@@ -249,24 +252,28 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 dist.recv(hidden_states, src=self.rank - 1)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
-                mask_shape = torch.zeros(2, dtype=torch.int64, device=self.model_device)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] waiting for attention mask shape tensor: {mask_shape}")
-                    print(f"[{self.rank}] waiting for attention mask shape tensor from {self.rank-1}")
-                dist.recv(mask_shape, src=self.rank - 1)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
-                    print(f"[{self.rank}] recieved attention mask shape tensor: {mask_shape}")
-                attention_mask = torch.zeros(
-                    tuple(mask_shape.tolist()), dtype=torch.long, device=self.model_device
-                )
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] waiting for attention mask tensor from {self.rank-1}")
-                dist.recv(attention_mask, src=self.rank - 1)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
+                # mask_shape = torch.zeros(2, dtype=torch.int64, device=self.model_device)
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] waiting for attention mask shape tensor: {mask_shape}")
+                #     print(f"[{self.rank}] waiting for attention mask shape tensor from {self.rank-1}")
+                # dist.recv(mask_shape, src=self.rank - 1)
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
+                #     print(f"[{self.rank}] recieved attention mask shape tensor: {mask_shape}")
+                # attention_mask = torch.zeros(
+                #     tuple(mask_shape.tolist()), dtype=torch.long, device=self.model_device
+                # )
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] waiting for attention mask tensor from {self.rank-1}")
+                # dist.recv(attention_mask, src=self.rank - 1)
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] recieved attention mask shape tensor from {self.rank-1}")
 
-            if not is_prefill and attention_mask is not None:
+            # if not is_prefill and attention_mask is not None:
+            #     attention_mask = torch.ones(
+            #         (hidden_states.shape[0], hidden_states.shape[1]), dtype=torch.long, device=self.model_device
+            #     )
+            if attention_mask is None:
                 attention_mask = torch.ones(
                     (hidden_states.shape[0], hidden_states.shape[1]), dtype=torch.long, device=self.model_device
                 )
@@ -290,33 +297,33 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     print(f"[{self.rank}] Iterated over layer {idx}")
             self.past_key_values_dict[mb_id] = new_past_key_values
             if print_deadlocking_checks:
-                print(f"[{self.rank}] hidden_states_dtype: {hidden_states.dtype}")
-                print(f"[{self.rank}] hidden_states shape: {hidden_states.shape}")
+                print(f"[{self.rank}] preparing to send hidden_states_dtype: {hidden_states.dtype}")
+                print(f"[{self.rank}] preparing to send hidden_states shape: {hidden_states.shape}")
             if self.rank < self.world_size - 1:
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
-                    print(f"[{self.rank}] sending shape and hidden to rank {self.rank+1}")
+                    print(f"[{self.rank}] Sending hidden states and information to [{self.rank+1}] for micro batch: {mb_id}")
                 dist.send(shape_tensor, dst=self.rank + 1)
                 dist.send(hidden_states, dst=self.rank + 1)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] sent shape and hidden to rank {self.rank+1}")
-                if attention_mask is None:
-                    print(f"[{self.rank}] Attention mask was None initalizing a mask")
-                    attention_mask = torch.ones(
-                        (hidden_states.shape[0], hidden_states.shape[1]),
-                        dtype=torch.long,
-                        device=self.model_device,
-                    )
-                mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.model_device)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] Sending attnetion mask shape: {mask_shape}")
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] sending mask shape {mask_shape}")
-                    print(f"[{self.rank}] sending attention mask shape and attention mask to rank {self.rank+1}")
-                dist.send(mask_shape, dst=self.rank + 1)
-                dist.send(attention_mask, dst=self.rank + 1)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] sent attention mask shape and attention mask to rank {self.rank+1}")
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] sent shape and hidden to rank {self.rank+1}")
+                # if attention_mask is None:
+                #     print(f"[{self.rank}] Attention mask was None initalizing a mask")
+                #     attention_mask = torch.ones(
+                #         (hidden_states.shape[0], hidden_states.shape[1]),
+                #         dtype=torch.long,
+                #         device=self.model_device,
+                #     )
+                # mask_shape = torch.tensor(list(attention_mask.shape), dtype=torch.int64, device=self.model_device)
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] Sending attnetion mask shape: {mask_shape}")
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] sending mask shape {mask_shape}")
+                #     print(f"[{self.rank}] sending attention mask shape and attention mask to rank {self.rank+1}")
+                # dist.send(mask_shape, dst=self.rank + 1)
+                # dist.send(attention_mask, dst=self.rank + 1)
+                # if print_deadlocking_checks:
+                #     print(f"[{self.rank}] sent attention mask shape and attention mask to rank {self.rank+1}")
                 return None
             hidden_states = self.norm(hidden_states)
             logits = self.lm_head(hidden_states)
@@ -325,7 +332,6 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
     @torch.inference_mode()
     def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=True):
         self.clear_cache()
-
         if self.rank == 0 and len(micro_batches) < self.world_size:
             sys.exit(f"Number of micro batches is smaller than world size\n\tWorld size: {self.world_size} Micro Batches: {len(micro_batches)}")
 
@@ -371,10 +377,10 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
             # total_steps = num_mbs*num_tokens + (self.world_size - self.rank)
             total_steps = num_mbs * num_tokens + self.world_size - 1
             for step in range(total_steps):
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] on step {step}")
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] on step {step} working on mb: {mb_id}")
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
                     if print_deadlocking_checks:
                         print(f"[{self.rank}] on step {step} active: {active}")
@@ -396,11 +402,11 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                         )
 
                     broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
-                    bc_active = step >= self.world_size - 1
+                    bc_active = step >= self.world_size - 1 
+                    
                     if print_deadlocking_checks:
                         print(f"[{self.rank}] on step {step} bc_active: {bc_active}")
                     if bc_active:
-                        
                         mb_bs = batch_sizes[broadcasting_mb_id]
                         next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.model_device)
                         if self.rank == self.world_size - 1:
@@ -414,15 +420,31 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                             else:
                                 next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
                         if print_deadlocking_checks:
-                            print(f"[{self.rank}][{step}] broadcasting next token tensor {next_token}")
-                        dist.broadcast(next_token, src=self.world_size - 1)
+                            print(f"[{self.rank}] reached broadcast for micro batch {broadcasting_mb_id}")
+                        # dist.barrier()
+                        dist.broadcast(next_token, src=self.world_size-1)
                         if print_deadlocking_checks:
-                            print(f"[{self.rank}][{step}] finished broadcasting next token tensor {next_token}")
+                            print(f"[{self.rank}] finished broadcast for micro batch {broadcasting_mb_id}")
+                        # if self.rank == 0:
+                        #     if print_deadlocking_checks:
+                        #         print(f"[{self.rank}][{step}] recieving the next token {next_token} for micro batch: {mb_id} from: {self.world_size - 1}")
+                        #     dist.recv(next_token, src=self.world_size - 1, group=self.token_pg)
+                        #     if print_deadlocking_checks:
+                        #         print(f"[{self.rank}][{step}] recieved the next token {next_token} for micro batch: {mb_id}")
+                        # elif self.rank == self.world_size - 1:
+                        #     if print_deadlocking_checks:
+                        #         print(f"[{self.rank}][{step}] sending the next token {next_token} for micro batch: {mb_id}")
+                        #     dist.send(next_token, dst=0, group=self.token_pg)
+                        #     if print_deadlocking_checks:
+                        #         print(f"[{self.rank}][{step}] sendt the next token {next_token} for micro batch: {mb_id}")
+                        # if print_deadlocking_checks:
+                        #     print(f"[{self.rank}][{step}] finished broadcasting next token tensor {next_token}")
                         if self.rank == 0:
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
+                        # dist.barrier()
         if single_call: 
-            generate_token_loop(False, max_new_tokens)
+            generate_token_loop(True, max_new_tokens)
         else:
             with nvtx.annotate("pipelined_prefill", color="blue"):
                 generate_token_loop(True, 1)

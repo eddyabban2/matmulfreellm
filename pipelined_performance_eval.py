@@ -158,7 +158,7 @@ def benchmark_generation(pipelined_model, batch_size, seq_len, num_iterations, m
         window_key = "generate pipeline"
 
     print("running warmup")
-    pipelined_model.generate_pipelined(micro_batches[0:world_size+1], max_new_tokens=world_size)
+    pipelined_model.generate_pipelined(micro_batches, max_new_tokens=world_size)
     print("finished warmup")
     row["Estimated Memory Usage Per GPU Memory Usage (GB)"] = (torch.cuda.memory_allocated())/(1024**3)
     row["Estimated Total Memory Usage(GB)"] = (torch.cuda.memory_allocated()*world_size)/(1024**3)
@@ -290,7 +290,10 @@ def create_csv_data(
                 'device': devices, 
                 'Hidden Layer Size': original_hidden_layer_size*weight_multiplier, 
                 'Number of Layers': original_num_layers*layers_multiplier, 
-                'Weight Compression' : weight_compression}
+                'Weight Compression' : weight_compression, 
+                'Seqeuence Length': sequence_length, 
+                'New Tokens': max_new_tokens, 
+                'Micro Batches': count_micro_batches}
             for batch_power in reversed(range(min_batch_power, max_batch_power)):
                 batch_size = 2**batch_power
                 row['Batch Size'] = batch_size
