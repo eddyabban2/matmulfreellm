@@ -37,7 +37,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         self.model_device = torch.device(f"cuda:{self.rank}")
         compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
         if not dist.is_initialized():
-            timeout = timedelta(seconds=180)
+            timeout = timedelta(seconds=30)
             torch.cuda.set_device(self.local_rank)
             self.model_device = torch.device(f"cuda:{self.local_rank}")
             dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout)
@@ -273,6 +273,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
                 hidden_states = torch.empty(tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.model_device)
                 if print_deadlocking_checks:
+                    print(f"[{self.rank}] Shape tensor is {shape_tensor}")
                     print(f"[{self.rank}] waiting for hidden states tensor from {self.rank-1}")
                 dist.recv(hidden_states, src=prev_rank)
                 if print_deadlocking_checks:
@@ -438,7 +439,6 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                         mask = current_mb_masks[mb_id] if (self.rank == 0 and step == mb_id) else None
                         if print_deadlocking_checks:
                             print(f"[{self.rank}] reached barrier before forward step")
-                        dist.barrier()
                         if print_deadlocking_checks:
                             print(f"[{self.rank}] passed barrier before forward step")
                         logits = self.pipelined_forward_step(
@@ -447,11 +447,6 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                             attention_mask=mask,
                             is_prefill=is_prefill,
                         )
-                        if print_deadlocking_checks:
-                            print(f"[{self.rank}] reached barrier after forward step")
-                        dist.barrier()
-                        if print_deadlocking_checks:
-                            print(f"[{self.rank}] passed barrier after forward step")
 
                     broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
                     bc_active = step >= self.world_size - 1 
@@ -493,8 +488,8 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
 def main():
     MODEL_ID = "ridger/MMfreeLM-2.7B"
-    layers_multiplier = 0.25
-    weight_multiplier = 0.25
+    layers_multiplier = 0.125
+    weight_multiplier = 3.9375
     vocab_size_multiplier = 1
     print_model_config = True
     use_weight_compression = False
@@ -504,8 +499,8 @@ def main():
     print(f"GPU memory usage: {memory_gb:.2f} GB")
     num_micro_batches = 7
     batch_size_per_mb = 5
-    sequence_length = 20
-    max_new_tokens = 8
+    sequence_length = 5000
+    max_new_tokens = 1
 
     micro_batches = []
     if int(os.environ.get("RANK", 0)) == 0:
