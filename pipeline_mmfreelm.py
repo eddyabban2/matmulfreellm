@@ -227,12 +227,45 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         self.past_key_values_dict = {}
 
     @torch.inference_mode()
-    def pipelined_forward_step(self, mb_id, input_ids=None, hidden_states=None, attention_mask=None, is_prefill=True):
+    def pipelined_forward_step(self, mb_id, input_ids=None, hidden_states=None, attention_mask=None, is_prefill=True, step=None, num_mbs=None, current_mb_inputs=None, all_generated_tokens=None, batch_sizes=None):
         with nvtx.annotate(f"micro batch: {mb_id}", color="orange"):
             mb_past_kvs = self.past_key_values_dict.get(mb_id, None)
             new_past_key_values = []
+            def broadcast_next_token():
+                broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
+                bc_active = step >= self.world_size - 1 
+                
+                if print_deadlocking_checks:
+                    print(f"[{self.rank}] on step {step} bc_active: {bc_active}")
+                if bc_active:
+                    mb_bs = batch_sizes[broadcasting_mb_id]
+                    next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.model_device)
+                    if self.rank == self.world_size - 1:
+                        assert logits is not None, (
+                            f"Rank {self.rank}: expected logits for mb {broadcasting_mb_id} at step {step}"
+                        )
+                        next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                    next_token = next_token.contiguous()
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] reached broadcast for micro batch {broadcasting_mb_id}")
+                        print(f"[{self.rank}] Next token tensor before broadcast: {next_token}")
+                        print(f"[{self.rank}] Next token tensor shape before broadcast: {next_token.shape}")
+                        print(f"[{self.rank}] Next token tensor dtype before broadcast: {next_token.dtype}")
+                    dist.broadcast(next_token, src=self.world_size-1)
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] Next token tensor after broadcast: {next_token}")
+                        print(f"[{self.rank}] Next token tensor shape after broadcast: {next_token.shape}")
+                        print(f"[{self.rank}] Next token tensor dtype after broadcast: {next_token.dtype}")
+                        print(f"[{self.rank}] finished broadcast for micro batch {broadcasting_mb_id}")
+                    if self.rank == 0:
+                        current_mb_inputs[broadcasting_mb_id] = next_token
+                    all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
             if self.rank == 0:
                 assert input_ids is not None, "Rank 0 requires input_ids"
+                next_rank = (self.rank + 1) % self.world_size
+                if next_rank == self.world_size-1:
+                    print(f"[{self.rank}] Next rank is last broadcasting now")
+                    broadcast_next_token()
                 hidden_states = self.embeddings(input_ids)
                 if attention_mask is None:
                     attention_mask = torch.ones(
@@ -252,21 +285,21 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                         print(f"[{self.rank}] iterating on layer: {idx}")
                     hidden_states = outputs[0] if isinstance(outputs, tuple) else outputs
                     new_past_key_values.append(outputs[1])
+                if next_rank != self.world_size-1:
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] Next rank is not last broadcasting now")
+                    broadcast_next_token()
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sending hidden states shape: {shape_tensor}")
-                next_rank = (self.rank + 1) % self.world_size
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sending hidden states and information to [{next_rank}] for micro batch: {mb_id}")
-                shape_handle = dist.isend(shape_tensor, dst=next_rank)
+                dist.send(shape_tensor, dst=next_rank)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sent hidden states and information to [{next_rank}] for micro batch: {mb_id}")
-                hidden_handle = dist.isend(hidden_states, dst=next_rank)
+                dist.send(hidden_states, dst=next_rank)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sent hidden states and information to [{next_rank}] for micro batch: {mb_id}")
-                    print(f"[{self.rank}] Waiting on handles")
-                # shape_handle.wait()
-                # hidden_handle.wait()
             elif 0 < self.rank < self.world_size - 1:
                 prev_rank = (self.rank - 1) % self.world_size
                 next_rank = (self.rank + 1) % self.world_size
@@ -309,20 +342,20 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     new_past_key_values.append(outputs[1])
                     if print_deadlocking_checks:
                         print(f"[{self.rank}]iterating on layer: {idx}")
+                if next_rank != self.world_size-1:
+                    broadcast_next_token()
                 shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
                 assert torch.all(shape_tensor != 0), "Tensor contains a zero!"
-                next_rank = (self.rank + 1) % self.world_size
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sending hidden states and information to [{self.rank+1}] for micro batch: {mb_id}")
-                shape_handle = dist.isend(shape_tensor, dst=next_rank)
+                dist.send(shape_tensor, dst=next_rank)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sending hidden states shape: {shape_tensor}")
-                hidden_handle = dist.isend(hidden_states, dst=next_rank)
+                dist.send(hidden_states, dst=next_rank)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Sent hidden states and information to [{self.rank+1}] for micro batch: {mb_id}")
-                    print(f"[{self.rank}] Waiting for handle")
-                # shape_handle.wait()
-                # hidden_handle.wait()
+                if next_rank == self.world_size-1:
+                    broadcast_next_token()
             elif self.rank == self.world_size - 1:
                 prev_rank = (self.rank - 1) % self.world_size
                 next_rank = (self.rank + 1) % self.world_size
@@ -364,42 +397,11 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     if print_deadlocking_checks:
                         print(f"[{self.rank}] iterating on layer: {idx}")
                 hidden_states = self.norm(hidden_states)
-                logits = self.lm_head(hidden_states)
-                return logits
-            return None  
+                logits = self.lm_head(hidden_states)  
+                broadcast_next_token()
+            else:
+                assert False, f"Invalid rank number: {self.rank}"
                 
-            new_past_key_values = []
-            if print_deadlocking_checks:
-                print(f"[{self.rank}] Iterating over layers")
-            for idx, layer in enumerate(self.local_layers):
-                layer_past = mb_past_kvs[idx] if mb_past_kvs is not None else None
-                outputs = layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    past_key_values=layer_past,
-                    use_cache=True,
-                    output_attentions=True,
-                    lower_bound=True,
-                )
-                hidden_states = outputs[0] if isinstance(outputs, tuple) else outputs
-                new_past_key_values.append(outputs[1])
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] Iterated over layer {idx}")
-            self.past_key_values_dict[mb_id] = new_past_key_values
-            if print_deadlocking_checks:
-                print(f"[{self.rank}] preparing to send hidden_states_dtype: {hidden_states.dtype}")
-                print(f"[{self.rank}] preparing to send hidden_states shape: {hidden_states.shape}")
-            if self.rank < self.world_size - 1:
-                shape_tensor = torch.tensor(list(hidden_states.shape), dtype=torch.int64, device=self.model_device)
-                if print_deadlocking_checks:
-                    print(f"[{self.rank}] Sending hidden states and information to [{self.rank+1}] for micro batch: {mb_id}")
-                dist.isend(shape_tensor, dst=self.rank + 1)
-                dist.isend(hidden_states, dst=self.rank + 1)
-                return None
-            hidden_states = self.norm(hidden_states)
-            logits = self.lm_head(hidden_states)
-            return logits
-
     @torch.inference_mode()
     def generate_pipelined(self, micro_batches, max_new_tokens=20, temperature=0.75, single_call=True):
         self.clear_cache()
@@ -447,6 +449,8 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
             total_steps = num_mbs * num_tokens + self.world_size - 1
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] total steps = {total_steps}")
             for step in range(total_steps):
                 with nvtx.annotate(f"step: {step}", color="violet"):
                     mb_id = (step - self.rank) % num_mbs
@@ -455,7 +459,6 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     active = self.rank <=  step and step < (num_mbs*num_tokens + self.rank)
                     if print_deadlocking_checks:
                         print(f"[{self.rank}] on step {step} active: {active}")
-                    logits = None
                     if active:
                         if self.rank == 0:
                             print(f"[{self.rank}] Attention Masks in loop:")
@@ -464,38 +467,39 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                         inp = current_mb_inputs[mb_id] if self.rank == 0 else None
                         mask = current_mb_masks[mb_id] if (self.rank == 0 and step == mb_id) else None
                         
-                        logits = self.pipelined_forward_step(
+                        self.pipelined_forward_step(
                             mb_id=mb_id,
                             input_ids=inp,
                             attention_mask=mask,
                             is_prefill=is_prefill,
-                        )
-
+                            step=step, 
+                            num_mbs=num_mbs, 
+                            current_mb_inputs=current_mb_inputs, 
+                            all_generated_tokens=all_generated_tokens,
+                            batch_sizes=batch_sizes
+                            )
                     broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
                     bc_active = step >= self.world_size - 1 
                     
-                    if print_deadlocking_checks:
-                        print(f"[{self.rank}] on step {step} bc_active: {bc_active}")
-                    if bc_active:
+                    if self.rank != self.world_size-1 and bc_active and not active: 
                         mb_bs = batch_sizes[broadcasting_mb_id]
                         next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.model_device)
-                        if self.rank == self.world_size - 1:
-                            assert logits is not None, (
-                                f"Rank {self.rank}: expected logits for mb {broadcasting_mb_id} at step {step}"
-                            )
-                            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                        next_token = next_token.contiguous()
                         if print_deadlocking_checks:
                             print(f"[{self.rank}] reached broadcast for micro batch {broadcasting_mb_id}")
                             print(f"[{self.rank}] Next token tensor before broadcast: {next_token}")
-                        # wait_for_broadcast = self.rank == 0 or self.rank == self.world_size-1
+                            print(f"[{self.rank}] Next token tensor shape before broadcast: {next_token.shape}")
+                            print(f"[{self.rank}] Next token tensor dtype before broadcast: {next_token.dtype}")
                         dist.broadcast(next_token, src=self.world_size-1)
                         if print_deadlocking_checks:
                             print(f"[{self.rank}] Next token tensor after broadcast: {next_token}")
+                            print(f"[{self.rank}] Next token tensor shape after broadcast: {next_token.shape}")
+                            print(f"[{self.rank}] Next token tensor dtype after broadcast: {next_token.dtype}")
                             print(f"[{self.rank}] finished broadcast for micro batch {broadcasting_mb_id}")
                         if self.rank == 0:
                             current_mb_inputs[broadcasting_mb_id] = next_token
                         all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
-                        # dist.barrier()
+
         if single_call: 
             generate_token_loop(False, max_new_tokens)
         else:
@@ -522,10 +526,10 @@ def main():
     memory_bytes = torch.cuda.memory_allocated()
     memory_gb = memory_bytes / (1024 ** 3)
     print(f"GPU memory usage: {memory_gb:.2f} GB")
-    num_micro_batches = 7
+    num_micro_batches = 3
     batch_size_per_mb = 5
     sequence_length = 5000
-    max_new_tokens = 1
+    max_new_tokens = 5
 
     micro_batches = []
     if int(os.environ.get("RANK", 0)) == 0:
@@ -540,8 +544,8 @@ def main():
     print("generated input tokens")
     dist.barrier()
     print("running warmup")
-    for _ in range(100):
-        outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=1)
+    for _ in range(1):
+        outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=3)
     gc.collect()
     torch.cuda.empty_cache()
     print("finished running warmup runnning workload")
