@@ -20,8 +20,6 @@ from scaled_mmfree import print_system_ram
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING"] = "false"
 os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["NCCL_IB_DISABLE"] = "1"
-OMP_NUM_THREADS=1
 
 import torch.multiprocessing as mp
 if __name__ == '__main__':
@@ -311,16 +309,21 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     print(f"[{self.rank}] Recieving hidden states and information to [{self.rank-1}] for micro batch: {mb_id}")
                     print(f"[{self.rank}] waiting for hidden state shape tensor from {self.rank-1}")
                     print(f"[{self.rank}] Expecting shape tensor to fit in {shape_tensor}")
-                dist.recv(shape_tensor, src=prev_rank)
+                shape_handle = dist.irecv(shape_tensor, src=prev_rank)
+                if print_deadlocking_checks: 
+                    print(f"[{self.rank}] Waiting for handle now")
+                shape_handle.wait()
                 if print_deadlocking_checks:
-                    print(f"[{self.rank}] Recieving hidden states tensor shape {shape_tensor}")
+                    print(f"[{self.rank}] Recieved hidden states tensor shape {shape_tensor}")
                 hidden_states = torch.empty(tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Shape tensor is {shape_tensor}")
                     print(f"[{self.rank}] waiting for hidden states tensor from {self.rank-1}")
-                dist.recv(hidden_states, src=prev_rank)
+                hidden_handle = dist.irecv(hidden_states, src=prev_rank)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
+                    print(f"[{self.rank}] Waiting for handle")
+                hidden_handle.wait()
                 if attention_mask is None:
                     attention_mask = torch.ones(
                         (hidden_states.shape[0], hidden_states.shape[1]), dtype=torch.long, device=self.model_device
@@ -362,13 +365,17 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     print(f"[{self.rank}] Recieving hidden states and information to [{self.rank-1}] for micro batch: {mb_id}")
                     print(f"[{self.rank}] waiting for hidden state shape tensor from {self.rank-1}")
                     print(f"[{self.rank}] Expecting shape tensor to fit in {shape_tensor}")
-                dist.recv(shape_tensor, src=prev_rank)
+                shape_handle = dist.irecv(shape_tensor, src=prev_rank)
+                shape_handle.wait()
                 assert torch.all(shape_tensor != 0), "Tensor contains a zero!"
                 hidden_states = torch.zeros(tuple(shape_tensor.tolist()), dtype=torch.float16, device=self.model_device)
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] Shape tensor is {shape_tensor}")
                     print(f"[{self.rank}] waiting for hidden states tensor from {self.rank-1}")
-                dist.recv(hidden_states, src=prev_rank)
+                hidden_handle = dist.irecv(hidden_states, src=prev_rank)
+                if print_deadlocking_checks: 
+                    print(f"[{self.rank}] waiting on hidden")
+                hidden_handle.wait()
                 if print_deadlocking_checks:
                     print(f"[{self.rank}] recieved hidden states tensor from {self.rank-1}")
                 if attention_mask is None:
