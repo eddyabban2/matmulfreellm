@@ -37,7 +37,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
         self.model_device = torch.device(f"cuda:{self.rank}")
         compression_type = CompressedType.NAIVE if weight_compression else CompressedType.FLOAT16
         if not dist.is_initialized():
-            timeout = timedelta(seconds=30)
+            timeout = timedelta(seconds=180)
             torch.cuda.set_device(self.local_rank)
             self.model_device = torch.device(f"cuda:{self.local_rank}")
             dist.init_process_group(backend="nccl", world_size=self.world_size, rank=self.rank, device_id=self.model_device, timeout=timeout)
@@ -470,7 +470,28 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                             current_mb_inputs=current_mb_inputs, 
                             all_generated_tokens=all_generated_tokens,
                             batch_sizes=batch_sizes
-                        )
+                            )
+                    broadcasting_mb_id = (step - self.world_size + 1) % num_mbs
+                    bc_active = step >= self.world_size - 1 
+                    
+                    if self.rank != self.world_size-1 and bc_active and not active: 
+                        mb_bs = batch_sizes[broadcasting_mb_id]
+                        next_token = torch.zeros((mb_bs, 1), dtype=torch.int64, device=self.model_device)
+                        next_token = next_token.contiguous()
+                        if print_deadlocking_checks:
+                            print(f"[{self.rank}] reached broadcast for micro batch {broadcasting_mb_id}")
+                            print(f"[{self.rank}] Next token tensor before broadcast: {next_token}")
+                            print(f"[{self.rank}] Next token tensor shape before broadcast: {next_token.shape}")
+                            print(f"[{self.rank}] Next token tensor dtype before broadcast: {next_token.dtype}")
+                        dist.broadcast(next_token, src=self.world_size-1)
+                        if print_deadlocking_checks:
+                            print(f"[{self.rank}] Next token tensor after broadcast: {next_token}")
+                            print(f"[{self.rank}] Next token tensor shape after broadcast: {next_token.shape}")
+                            print(f"[{self.rank}] Next token tensor dtype after broadcast: {next_token.dtype}")
+                            print(f"[{self.rank}] finished broadcast for micro batch {broadcasting_mb_id}")
+                        if self.rank == 0:
+                            current_mb_inputs[broadcasting_mb_id] = next_token
+                        all_generated_tokens[broadcasting_mb_id].append(next_token.cpu())
 
         if single_call: 
             generate_token_loop(False, max_new_tokens)
@@ -516,7 +537,7 @@ def main():
     print("generated input tokens")
     dist.barrier()
     print("running warmup")
-    for _ in range(100):
+    for _ in range(1):
         outputs = pipeline_model.generate_pipelined(micro_batches, max_new_tokens=3)
     gc.collect()
     torch.cuda.empty_cache()
