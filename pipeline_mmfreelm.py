@@ -25,7 +25,7 @@ import torch.multiprocessing as mp
 if __name__ == '__main__':
     mp.set_start_method('spawn')
 
-print_deadlocking_checks = True
+print_deadlocking_checks = False
 class PipelineParallelMatMulFreeLM(HGRNBitModel):
     def __init__(self, layers_multiplier=1, weight_multiplier=1, vocab_size_multiplier=1, weight_compression=False, print_model_config=False):
         torch.set_default_dtype(torch.float16)
@@ -264,7 +264,8 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 assert input_ids is not None, "Rank 0 requires input_ids"
                 next_rank = (self.rank + 1) % self.world_size
                 if next_rank == self.world_size-1:
-                    print(f"[{self.rank}] Next rank is last broadcasting now")
+                    if print_deadlocking_checks:
+                        print(f"[{self.rank}] Next rank is last broadcasting now")
                     broadcast_next_token()
                 hidden_states = self.embeddings(input_ids)
                 if attention_mask is None:
@@ -442,9 +443,9 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                 print(f"[{self.rank}] finished broadcasting batch size tensor {bs_tensor}")
             batch_sizes[mb_id] = bs_tensor.item()
         if self.rank == 0:
-            print(f"[{self.rank}] Attention Masks:")
-            for key, value in current_mb_masks.items():
-                if print_deadlocking_checks:
+            if print_deadlocking_checks:
+                print(f"[{self.rank}] Attention Masks:")
+                for key, value in current_mb_masks.items():
                     print(f"[{self.rank}] \tmb_id: {key} mask: {value}")
 
         def generate_token_loop(is_prefill, num_tokens) -> None:
@@ -460,7 +461,7 @@ class PipelineParallelMatMulFreeLM(HGRNBitModel):
                     if print_deadlocking_checks:
                         print(f"[{self.rank}] on step {step} active: {active}")
                     if active:
-                        if self.rank == 0:
+                        if self.rank == 0 and print_deadlocking_checks:
                             print(f"[{self.rank}] Attention Masks in loop:")
                             for key, value in current_mb_masks.items():
                                 print(f"[{self.rank}] \tmb_id: {key} mask: {value}")
