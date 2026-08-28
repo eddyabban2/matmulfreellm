@@ -1,0 +1,72 @@
+2.7B end to end with batch size: 1, tokens generated: 1, sequence length: 1
+==============================================================================================
+0 64 bit floating point operations
+4,153,884,827 32 bit floating point operations
+4,171,650,360 16 bit floating point operations
+0 tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs are 64 bit floating point operations
+49.89330696104834% of the FLOPs are 32 bit floating point operations
+50.106693038951654% of the FLOPs are 16 bit floating point operations
+0.0% of the FLOPs are tensor floating point operations
+==============================================================================================
+40.8075007755054% of the FLOPs are from kernels marked with HGRNBitAttentionForward
+55.06313337259336% of the FLOPs are from kernels marked with HGRNBitMLP
+==============================================================================================
+0.0% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations
+49.857492525004474% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations
+50.142507474995526% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs in HGRNBitMLP are 64 bit floating point operations
+49.9059161161315% of the FLOPs in HGRNBitMLP are 32 bit floating point operations
+50.0940838838685% of the FLOPs in HGRNBitMLP are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitMLP are tensor floating point operations
+2.7B end to end with batch size: 1, tokens generated: 1, sequence length: 1
+==============================================================================================
+0 64 bit floating point operations
+4,153,884,827 32 bit floating point operations
+4,171,650,360 16 bit floating point operations
+0 tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs are 64 bit floating point operations
+49.89330696104834% of the FLOPs are 32 bit floating point operations
+50.106693038951654% of the FLOPs are 16 bit floating point operations
+0.0% of the FLOPs are tensor floating point operations
+==============================================================================================
+40.8075007755054% of the FLOPs are from kernels marked with HGRNBitAttentionForward
+55.06313337259336% of the FLOPs are from kernels marked with HGRNBitMLP
+==============================================================================================
+0.0% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations
+49.857492525004474% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations
+50.142507474995526% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs in HGRNBitMLP are 64 bit floating point operations
+49.9059161161315% of the FLOPs in HGRNBitMLP are 32 bit floating point operations
+50.0940838838685% of the FLOPs in HGRNBitMLP are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitMLP are tensor floating point operations
+2.7B end to end with batch size: 64, tokens generated: 10, sequence length: 20
+==============================================================================================
+0 64 bit floating point operations
+46,351,767,550 32 bit floating point operations
+17,482,497,416 16 bit floating point operations
+0 tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs are 64 bit floating point operations
+72.61267530015158% of the FLOPs are 32 bit floating point operations
+27.387324699848413% of the FLOPs are 16 bit floating point operations
+0.0% of the FLOPs are tensor floating point operations
+==============================================================================================
+52.421599568544174% of the FLOPs are from kernels marked with HGRNBitAttentionForward
+35.87638448441127% of the FLOPs are from kernels marked with HGRNBitMLP
+==============================================================================================
+0.0% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations
+72.88362989797406% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations
+27.11637010202593% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs in HGRNBitMLP are 64 bit floating point operations
+75.40119692838353% of the FLOPs in HGRNBitMLP are 32 bit floating point operations
+24.598803071616473% of the FLOPs in HGRNBitMLP are 16 bit floating point operations
+0.0% of the FLOPs in HGRNBitMLP are tensor floating point operations

@@ -1,0 +1,54 @@
+scaled_mmfree prefill with batch size: 64, tokens generated: 2, sequence length: 1000 compression: False
+==============================================================================================
+0 64 bit floating point operations
+10,904,362,880,160 32 bit floating point operations
+5,387,814,095,193 16 bit floating point operations
+12,876,827,852,800,000 tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs are 64 bit floating point operations
+0.08457505130625854% of the FLOPs are 32 bit floating point operations
+0.0417882877282643% of the FLOPs are 16 bit floating point operations
+99.87363666096549% of the FLOPs are tensor floating point operations
+==============================================================================================
+32.85142611843841% of the FLOPs are from kernels marked with HGRNBitAttentionForward
+65.85731332182294% of the FLOPs are from kernels marked with HGRNBitMLP
+99.87789877408264% of the FLOPs are from kernels marked with Linear
+0.0007728558717353089% of the FLOPs are from kernels marked with Unpacking Weights
+0.0% of the FLOPs are from kernels marked with Post Quantization
+0.0% of the FLOPs are from kernels marked with Activation Quantization
+0.0% of the FLOPs are from kernels marked with bitnet attention
+==============================================================================================
+37.06237449477593% of the dram bytes accessed are from kernels marked with HGRNBitAttentionForward
+55.589324791071625% of the dram bytes accessed are from kernels marked with HGRNBitMLP
+49.91009766259793% of the dram bytes accessed are from kernels marked with Linear
+1.3455854231404643% of the dram bytes accessed are from kernels marked with Unpacking Weights
+0.0% of the dram bytes accessed are from kernels marked with Post Quntization
+0.0% of the dram bytes accessed are from kernels marked with Activation Quntization
+0.0% of the dram bytes accessed are from kernels marked with attention
+==============================================================================================
+35.06144682117757% of the runtime is from kernels marked with HGRNBitAttentionForward
+61.90452128584769% of the runtime is from kernels marked with  HGRNBitMLP
+84.74867421509569% of the runtime is from kernels marked with Linear
+0.6269503695988473% of the runtime is from kernels marked with Unpacking Weights
+0.0% of the runtime is from kernels marked with Post Quantization
+0.0% of the runtime is from kernels marked with activation Quantization
+0.0% of the runtime is from kernels marked with other attention
+==============================================================================================
+0.0% of the FLOPs in HGRNBitAttentionForward are 64 bit floating point operations
+0.12169108253082897% of the FLOPs in HGRNBitAttentionForward are 32 bit floating point operations
+0.06046532190995399% of the FLOPs in HGRNBitAttentionForward are 16 bit floating point operations
+99.81784359555922% of the FLOPs in HGRNBitAttentionForward are tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs in HGRNBitMLP are 64 bit floating point operations
+0.05860840367613141% of the FLOPs in HGRNBitMLP are 32 bit floating point operations
+0.026701935357200016% of the FLOPs in HGRNBitMLP are 16 bit floating point operations
+99.91468966096667% of the FLOPs in HGRNBitMLP are tensor floating point operations
+==============================================================================================
+0.0% of the FLOPs in Linear are 64 bit floating point operations
+0.004267323571552875% of the FLOPs in Linear are 32 bit floating point operations
+0.0% of the FLOPs in Linear are 16 bit floating point operations
+99.99573267642845% of the FLOPs in Linear are tensor floating point operations
+==============================================================================================
+0.03381226361279721% of the FLOPs are from kernels marked with scalar overhead
+3.8167439483532304% of the runtime is from kernels marked with scalar overhead
+11.644924695539313% of the dram bytes accessed are from kernels marked with scalar overhead

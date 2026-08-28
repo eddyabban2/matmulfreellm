@@ -1,0 +1,9 @@
+causal_conv1d==1.5.3.post1
+einops==0.8.1
+numpy==2.4.0
+packaging==25.0
+setuptools==80.9.0
+torch==2.6.0+cu124
+transformers==4.46.0
+triton==3.2.0
+zeus==0.13.1

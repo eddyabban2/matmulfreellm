@@ -105,8 +105,8 @@ def run_ncu_profile(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', 
         "--config-file", "off",
         "--export", report_name,
         "--force-overwrite",
-        "--replay-mode", "application",
-        "--app-replay-match", "name",
+        # "--replay-mode", "application",
+        # "--app-replay-match", "name",
         # "--target-processes", "all",
         "--target-processes", "application-only",
         "--metrics", metrics_string,
@@ -330,6 +330,7 @@ def estimate_fraction_of_memory_from_weights(bs, new_tokens, seq_len):
     return weight_floats/(weight_floats+ activation_floats + output_floats)
 
 def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', compression=False):
+    nvtx_col_name = "thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"
     clean_model_name = model_name.replace("/","-")
     workload_string = f"model{clean_model_name}-{curr_date}-bs{bs}-new_tok{new_tokens}-seq{seq_len}compression-{compression}"
     df = extract_dataframe_from_ncu_files_via_csv(bs, new_tokens, seq_len, model_name=model_name, compression=compression)
@@ -342,14 +343,14 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', comp
     full_workload_row['Workload'] = f'{clean_model_name} end to end with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len}'
     extract_additional_workload_data(df, full_workload_row['Workload'])
     if 'ridger' in model_name:
-        has_attention = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitAttentionForward')
-        has_mlp = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('HGRNBitMLP')
+        has_attention = df[nvtx_col_name].str.contains('HGRNBitAttentionForward')
+        has_mlp = df[nvtx_col_name].str.contains('HGRNBitMLP')
         first_group_of_attention_kernels_df = get_continous_group_of_kernals(df, has_attention, 0)
         first_group_of_mlp_kernels_df = get_continous_group_of_kernals(df, has_mlp, 0)
-    has_linear = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('ternary matmul')
-    has_prefill = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('prefill')
-    has_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep0')
-    has_second_decode = df["thread Domain:Push/Pop_Range:PL_Type:PL_Value:CLR_Type:Color:Msg_Type:Msg"].str.contains('decodingStep1')
+    has_linear = df[nvtx_col_name].str.contains('ternary matmul')
+    has_prefill = df[nvtx_col_name].str.contains('prefill')
+    has_decode = df[nvtx_col_name].str.contains('decodingStep0')
+    has_second_decode = df[nvtx_col_name].str.contains('decodingStep1')
     linear_kernels_df = get_continous_group_of_kernals(df, has_linear, 0)
     prefill_kernels_df = get_continous_group_of_kernals(df, has_prefill, 0)
     if not (has_second_decode == False).all():
@@ -361,6 +362,7 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', comp
     prefill_kernels_df.head(n=10000).to_csv(f"outputs/csvs/prefill_kernels-{workload_string}.csv")
     decode_kernels_df.head(n=10000).to_csv(f"outputs/csvs/decode_kernels-{workload_string}.csv")
 
+    unpacking_decode_df = decode_kernels_df[decode_kernels_df[nvtx_col_name].str.contains('unpack weights')]
 
     decode_string = f'{clean_model_name} decode with batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
     extract_additional_workload_data(decode_kernels_df, decode_string)
@@ -377,7 +379,10 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', comp
 
         first_pair = pd.concat([first_group_of_attention_kernels_df, first_group_of_mlp_kernels_df])
         first_pair.to_csv(f"outputs/csvs/first_layer_kernels-{workload_string}.csv")
-
+    if compression:
+        unpacking_decode_row = get_metrics_from_data_frame(unpacking_decode_df, fraction_of_memory_from_weights)
+        unpacking_decode_row['Workload'] = f'{clean_model_name} unpacking kernels in decode region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
+    
     linear_region_row = get_metrics_from_data_frame(linear_kernels_df, fraction_of_memory_from_weights)
     linear_region_row['Workload'] = f'{clean_model_name} first linearFunction region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
@@ -388,9 +393,14 @@ def create_rows(bs, new_tokens, seq_len, model_name='ridger/MMfreeLM-2.7B', comp
     decode_region_row['Workload'] = f'{clean_model_name}  first decode region: batch size: {bs}, tokens generated: {new_tokens}, sequence length: {seq_len} compression: {compression}'
 
     logger.info(f"full workload row generated: {full_workload_row}")
+    rows = [full_workload_row,linear_region_row, prefill_region_row, decode_region_row]
+
     if 'ridger' in workload_string:
-        return [full_workload_row, first_atte_region_row, first_mlp_region_row, linear_region_row, prefill_region_row, decode_region_row]
-    return [full_workload_row, linear_region_row, prefill_region_row, decode_region_row]
+        rows.append(first_atte_region_row) 
+        rows.append(first_mlp_region_row)
+    if compression: 
+        rows.append(unpacking_decode_row)
+    return rows
 
 def extract_additional_workload_data(df, workload_str):
     double_precision_count, single_precision_count, half_precision_count, tensor_count = extract_flops(df)

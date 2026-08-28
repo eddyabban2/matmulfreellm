@@ -1,0 +1,28 @@
+Terminated
+Extracting Roofline Data
+start time: 2026-04-06 18:06:02.605214
+32
+Extracted ncu path: /usr/local/bin/ncu
+running command /usr/local/bin/ncu --nvtx --nvtx-include workload/ --config-file off --export /home/eabban/eddy_matmulfreellm/ncu_runs/roofline_data_batch32newTokens10sequence161 --force-overwrite --replay-mode application --app-replay-match name --target-processes application-only --metrics dram__bytes.sum,gpu__time_duration.sum,sm__sass_thread_inst_executed_op_dadd_pred_on.sum,sm__sass_thread_inst_executed_op_dfma_pred_on.sum,sm__sass_thread_inst_executed_op_dmul_pred_on.sum,sm__sass_thread_inst_executed_op_fadd_pred_on.sum,sm__sass_thread_inst_executed_op_fmul_pred_on.sum,sm__sass_thread_inst_executed_op_ffma_pred_on.sum,sm__sass_thread_inst_executed_op_hadd_pred_on.sum,sm__sass_thread_inst_executed_op_hmul_pred_on.sum,sm__sass_thread_inst_executed_op_hfma_pred_on.sum,sm__ops_path_tensor_op_hmma_pred_on.sum,sm__ops_path_tensor_op_imma_pred_on.sum python /home/eabban/eddy_matmulfreellm/quiet_run.py -b 32 -s 161 -n 10 -i 1
+command finished now extracting data
+running command /usr/local/bin/ncu --import /home/eabban/eddy_matmulfreellm/ncu_runs/roofline_data_batch32newTokens10sequence161.ncu-rep --page raw --metrics dram__bytes.sum,gpu__time_duration.sum,sm__sass_thread_inst_executed_op_dadd_pred_on.sum,sm__sass_thread_inst_executed_op_dfma_pred_on.sum,sm__sass_thread_inst_executed_op_dmul_pred_on.sum,sm__sass_thread_inst_executed_op_fadd_pred_on.sum,sm__sass_thread_inst_executed_op_fmul_pred_on.sum,sm__sass_thread_inst_executed_op_ffma_pred_on.sum,sm__sass_thread_inst_executed_op_hadd_pred_on.sum,sm__sass_thread_inst_executed_op_hmul_pred_on.sum,sm__sass_thread_inst_executed_op_hfma_pred_on.sum,sm__ops_path_tensor_op_hmma_pred_on.sum,sm__ops_path_tensor_op_imma_pred_on.sum
+Traceback (most recent call last):
+  File "/home/eabban/eddy_matmulfreellm/scripts/roofline_data.py", line 253, in <module>
+    main()
+    ~~~~^^
+  File "/home/eabban/eddy_matmulfreellm/scripts/roofline_data.py", line 240, in main
+    row = get_data(batch_size, max_new_tokens, sequence_length)
+  File "/home/eabban/eddy_matmulfreellm/scripts/roofline_data.py", line 208, in get_data
+    data = get_ncu_data(bs, new_tokens, seq_len)
+  File "/home/eabban/eddy_matmulfreellm/scripts/roofline_data.py", line 109, in get_ncu_data
+    data = subprocess.check_output(extract_data_command).decode('ascii')
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 472, in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+           ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               **kwargs).stdout
+               ^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/local/bin/ncu', '--import', '/home/eabban/eddy_matmulfreellm/ncu_runs/roofline_data_batch32newTokens10sequence161.ncu-rep', '--page', 'raw', '--metrics', 'dram__bytes.sum,gpu__time_duration.sum,sm__sass_thread_inst_executed_op_dadd_pred_on.sum,sm__sass_thread_inst_executed_op_dfma_pred_on.sum,sm__sass_thread_inst_executed_op_dmul_pred_on.sum,sm__sass_thread_inst_executed_op_fadd_pred_on.sum,sm__sass_thread_inst_executed_op_fmul_pred_on.sum,sm__sass_thread_inst_executed_op_ffma_pred_on.sum,sm__sass_thread_inst_executed_op_hadd_pred_on.sum,sm__sass_thread_inst_executed_op_hmul_pred_on.sum,sm__sass_thread_inst_executed_op_hfma_pred_on.sum,sm__ops_path_tensor_op_hmma_pred_on.sum,sm__ops_path_tensor_op_imma_pred_on.sum']' returned non-zero exit status 143.
