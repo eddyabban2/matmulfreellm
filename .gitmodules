@@ -1,3 +1,6 @@
 [submodule "BitNet"]
 	path = BitNet
 	url = git@github.com:eddyabban2/BitNet.git
+[submodule "hybrid_experiment/ternary_matmul"]
+	path = hybrid_experiment/ternary_matmul
+	url = git@github.com:sifferman/ternary_matmul.git
