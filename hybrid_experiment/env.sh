@@ -12,7 +12,13 @@ _AU250_TEMP_LIMIT=${AU250_TEMP_LIMIT:-85}
 _au250_fpga_temp() { cat /sys/bus/pci/devices/${_AU250_BDF}/xmc.m.*/xmc_fpga_temp 2>/dev/null | head -1; }
 _au250_mgmt()      { ls /dev/xclmgmt* 2>/dev/null | head -1; }
 # Expose every DRM render node (the Xilinx one's index isn't stable on this GPU box) + mgmt.
-_au250_devflags()  { local f n; for n in /dev/dri/renderD*; do f="$f --device $n"; done; echo "$f --device $(_au250_mgmt)"; }
+_au250_devflags() {
+  local f n mgmt
+  for n in /dev/dri/renderD*; do f="$f --device $n"; done
+  mgmt=$(_au250_mgmt)
+  [ -n "$mgmt" ] && f="$f --device $mgmt"
+  echo "$f"
+}
 
 au250-temp() { echo "AU250 FPGA die: $(_au250_fpga_temp) C   (warn 88, shutdown 97)"; }
 
@@ -44,11 +50,14 @@ au250-run() {      # au250-run <cmd...>   run in the matched container; your CWD
     bash -c 'source /XRT/build/Release/opt/xilinx/xrt/setup.sh >/dev/null 2>&1; exec "$@"' _ "$@"
 }
 
+
+
 build_docker() { 
-  docker build -t $container_name -f Dockerfile ..
+  docker --debug build -t $container_name -f Dockerfile ..
 }
 
 run_test() { 
+  # Mini FPGA test
   au250-run python3 /au250_xrt/example/pynq_add_example.py /au250_xrt/example/MaxCores_370M.xclbin
   local t; t=$(_au250_fpga_temp)
   if [ -n "$t" ] && [ "$t" -ge "$_AU250_TEMP_LIMIT" ]; then
@@ -57,6 +66,9 @@ run_test() {
     return 1
   fi
 
+  echo "Now running FPGA only test"
+
+  # GPU only test of bitnet
   docker run --rm --privileged $(_au250_devflags) \
       -v /sys:/sys -v /lib/firmware/xilinx:/lib/firmware/xilinx:ro \
       -v /au250_xrt:/au250_xrt:ro -e HF_TOKEN  --gpus all --network host \
@@ -64,15 +76,63 @@ run_test() {
       bash -c 'source /XRT/build/Release/opt/xilinx/xrt/setup.sh >/dev/null 2>&1; exec python3 quiet_run.py -b 5 -s 10 -n 10 -i 1 --model_name microsoft/bitnet-b1.58-2B-4T --prefill_decode'
 }
 
+benchmark_pynqvivado2.7 () {
+  local t; t=$(_au250_fpga_temp)
+  if [ -n "$t" ] && [ "$t" -ge "$_AU250_TEMP_LIMIT" ]; then
+    echo "au250: REFUSING to run — FPGA at ${t}C (>= ${_AU250_TEMP_LIMIT}C). Let it cool / check airflow." >&2
+    echo "       This passive card is unstable near its 97C shutdown. Override: AU250_TEMP_LIMIT=NN au250-run ..." >&2
+    return 1
+  fi
+
+  docker run --rm --privileged $(_au250_devflags) \
+    -v /sys:/sys -v /lib/firmware/xilinx:/lib/firmware/xilinx:ro \
+    -v /au250_xrt:/au250_xrt:ro -e HF_TOKEN  --gpus all --network host \
+    -v "$PWD/..":/work -w /work/hybrid_experiment/ternary_matmul $container_name \
+    bash -c "source /XRT/build/Release/opt/xilinx/xrt/setup.sh >/dev/null 2>&1;  \
+    python3 -m sw_utils benchmark_pynqvivado /au250_xrt/xclbins/MaxCores_2_7B.json /au250_xrt/xclbins/MaxCores_2_7B.xclbin MMfreeLM-2.7B"
+}
+
+benchmark_pynqvivado370M () {
+  local t; t=$(_au250_fpga_temp)
+  if [ -n "$t" ] && [ "$t" -ge "$_AU250_TEMP_LIMIT" ]; then
+    echo "au250: REFUSING to run — FPGA at ${t}C (>= ${_AU250_TEMP_LIMIT}C). Let it cool / check airflow." >&2
+    echo "       This passive card is unstable near its 97C shutdown. Override: AU250_TEMP_LIMIT=NN au250-run ..." >&2
+    return 1
+  fi
+
+  docker run --rm --privileged $(_au250_devflags) \
+    -v /sys:/sys -v /lib/firmware/xilinx:/lib/firmware/xilinx:ro \
+    -v /au250_xrt:/au250_xrt:ro -e HF_TOKEN  --gpus all --network host \
+    -v "$PWD/..":/work -w /work/hybrid_experiment/ternary_matmul $container_name \
+    bash -c "source /XRT/build/Release/opt/xilinx/xrt/setup.sh >/dev/null 2>&1;  \
+    python3 -m sw_utils benchmark_pynqvivado /au250_xrt/xclbins/MaxCores_370M.json /au250_xrt/xclbins/MaxCores_370M.xclbin MMfreeLM-370M"
+}
+
 enter_docker() { 
   docker run --rm -it --privileged $(_au250_devflags) \
     -v /sys:/sys -v /lib/firmware/xilinx:/lib/firmware/xilinx:ro \
     -v /au250_xrt:/au250_xrt:ro -e HF_TOKEN --gpus all --network host \
-    -v "$PWD/..":/work $container_name \
+    -v "$PWD/..":/work -w /work/hybrid_experiment \
+    $container_name \
     bash
 }
 
-run_layer_test() { 
+
+simple_enter_docker() { 
+  docker run --rm -it \
+    $container_name \
+    bash
+}
+
+test_docker() { 
+  echo "$(_au250_devflags)"
+
+  docker run --rm -it --privileged $(_au250_devflags) \
+    $container_name \
+    bash
+}
+
+layer_test() { 
   local t; t=$(_au250_fpga_temp)
   if [ -n "$t" ] && [ "$t" -ge "$_AU250_TEMP_LIMIT" ]; then
     echo "au250: REFUSING to run — FPGA at ${t}C (>= ${_AU250_TEMP_LIMIT}C). Let it cool / check airflow." >&2

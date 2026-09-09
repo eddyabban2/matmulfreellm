@@ -16,6 +16,7 @@ bitnet/
 *.qdstrm
 *.log
 !tensorrt_changes.log
+!*requirements.txt
 *.pdf
 *.pth
 nsys_runs/

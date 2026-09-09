@@ -21,19 +21,24 @@ ENV XILINX_XRT=/XRT/build/Release/opt/xilinx/xrt
 ENV PATH=/XRT/build/Release/opt/xilinx/xrt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV LD_LIBRARY_PATH=/XRT/build/Release/opt/xilinx/xrt/lib
 
+RUN apt update -y && apt install neovim htop -y 
 # 5. Install Python stack
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-dev build-essential && \
+    python3 python3-pip python3-dev build-essential python-is-python3 && \
     rm -rf /var/lib/apt/lists/*
 
-    
-WORKDIR /work
-ADD ../.. /work
+RUN python3 -m pip install --upgrade pip
 
 RUN pip3 install --no-cache-dir 'numpy<2' 'pycparser<3' 'pynq==3.0.1'
 
-RUN pip3 install --no-cache-dir -r bitnet_requirements.txt
-RUN pip3 install --upgrade Pillow
+COPY ../bitnet_requirements.txt /work/bitnet_requirements.txt
+RUN pip3 install --no-cache-dir -r /work/bitnet_requirements.txt
+
+COPY ../ternary_matmul_requirements.txt /work/ternary_matmul_requirements.txt
+RUN pip3 install --no-cache-dir -r /work/ternary_matmul_requirements.txt 
     
-WORKDIR /work/hybrid_experiment
+RUN pip3 install --upgrade Pillow
+ENV PYTHONPATH="/work/hybrid_experiment/ternary_matmul/sw_utils"
+
 CMD ["/bin/bash"]
