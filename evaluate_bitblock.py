@@ -165,7 +165,7 @@ for ax, (key, values) in zip(axes, all_results.items()):
 plt.suptitle("EvluationBitBlock Timing Distributions", fontsize=14, y=1.02)
 
 # Save the plot (crucial if running on a headless GPU server)
-plt.savefig("outputs/images/timgs.png", bbox_inches='tight')
+plt.savefig("outputs/images/timings.png", bbox_inches='tight')
 
 # print(f"full results: {all_results}")
 for key, values in all_results.items(): 
