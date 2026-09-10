@@ -242,6 +242,34 @@ class ScalableHGRNBitModel(HGRNBitModel):
                         with torch.no_grad():
                             p /= math.sqrt(num_residuals_per_layer * self.config.num_hidden_layers)
 
+base_config = config = HGRNBitConfig(
+        vocab_size = int(32000),
+        hidden_size = int(2560),
+        num_hidden_layers = int(32),
+        attn_mode = "fused_recurrent",
+        num_heads = 1,
+        expand_ratio = 1,
+        use_short_conv = False,
+        conv_size = 4,
+        share_conv_kernel = True,
+        use_lower_bound = True,
+        hidden_ratio = 1,
+        intermediate_size = int(6912),
+        hidden_act = "swish",
+        max_position_embeddings = 2048,
+        rms_norm_eps = 1e-6,
+        use_cache = True,
+        pad_token_id = None,
+        bos_token_id = 1,
+        eos_token_id = 2,
+        tie_word_embeddings = False,
+        initializer_range = 0.02,
+        fuse_cross_entropy = True, 
+        model_type = "hgrn_bit", 
+        compressed_type=CompressedType.NAIVE, 
+        device="cuda"
+    )
+
 def create_model_from_scratch(
         layers_multiplier=1, 
         weight_multiplier=1, 
