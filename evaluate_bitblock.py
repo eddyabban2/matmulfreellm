@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
-import copy 
+import copy
 import sys
 import random
-import gc 
+import gc
 from typing import List, Optional, Tuple, Union
 import math
 from utils import generate_dataset_input_ids, create_string_from_tokens, generate_random_input_ids
@@ -23,6 +23,7 @@ from scaled_mmfree import base_config, ScalableHGRNBitModel
 import torch
 import nvtx
 from typing import Optional, Tuple, List, Dict
+import argparse
 
 class EvluationBitBlock(HGRNBitBlock):
     def forward(
@@ -35,11 +36,11 @@ class EvluationBitBlock(HGRNBitBlock):
             lower_bound: Optional[torch.Tensor] = False,
             **kwargs,
         ) -> Tuple[Tuple[torch.Tensor, ...], Dict[str, float]]:
-        
+
         # Helper to create timing events
         def create_event():
             return torch.cuda.Event(enable_timing=True)
-            
+
         # Dictionary to store start and end events for each operation
         events = {
             "attn_norm": (create_event(), create_event()),
@@ -51,12 +52,12 @@ class EvluationBitBlock(HGRNBitBlock):
 
         with nvtx.annotate("HGRNBitBlock forward", color="cornsilk"):
             residual = hidden_states
-            
+
             # 1. Benchmark attn_norm
             events["attn_norm"][0].record()
             hidden_states = self.attn_norm(hidden_states)
             events["attn_norm"][1].record()
-            
+
             # 2. Benchmark attn
             events["attn"][0].record()
             hidden_states, attentions, past_key_values = self.attn(
@@ -68,28 +69,28 @@ class EvluationBitBlock(HGRNBitBlock):
                 lower_bound=lower_bound
             )
             events["attn"][1].record()
-            
+
             events["mlp_norm"][0].record()
             hidden_states, residual = self.mlp_norm(hidden_states, residual, True)
             events["mlp_norm"][1].record()
-            
+
             events["mlp"][0].record()
             hidden_states = self.mlp(hidden_states)
             events["mlp"][1].record()
-            
+
             events["residual_add"][0].record()
             hidden_states = residual + hidden_states
             events["residual_add"][1].record()
 
             torch.cuda.synchronize()
-            
+
             timings = {
-                op: start.elapsed_time(end) 
+                op: start.elapsed_time(end)
                 for op, (start, end) in events.items()
             }
 
             outputs = (hidden_states, attentions, past_key_values)
-            
+
             return (outputs, timings)
 
 def init_weights(
@@ -114,6 +115,27 @@ def init_weights(
                 if name in ["o_proj.weight", "down_proj.weight"]:
                     with torch.no_grad():
                         p /= math.sqrt(num_residuals_per_layer * config.num_hidden_layers)
+
+parser = argparse.ArgumentParser(
+    description="Evaluates the Performance of BitBlock"
+)
+
+parser.add_argument(
+    "-b",
+    "--batch_size",
+    default=1,
+    help="sets the batch size"
+)
+
+parser.add_argument(
+    "-s",
+    "--seq_len",
+    default=1,
+    help="sets the sequence length of input tokens"
+)
+
+args = parser.parse_args()
+
 torch.set_default_dtype(torch.float16)
 config = base_config
 layer_idx = 5
@@ -125,9 +147,11 @@ init_weights(bitblock.attn.o_proj, config)
 
 init_weights(bitblock.mlp.gate_proj, config)
 init_weights(bitblock.mlp.down_proj, config)
+batch_size = int(args.batch_size)
+seq_len = int(args.seq_len)
 
-# hidden_states = torch.normal(mean=0, std=1.5, size=(10, 29, 500))
-hidden_states = torch.rand(500,29, 2560, dtype=torch.float16).to("cuda")
+hidden_size = 2560
+hidden_states = torch.rand(batch_size,seq_len, hidden_size, dtype=torch.float16).to("cuda")
 print("Running warmup")
 with torch.no_grad():
     bitblock.forward(hidden_states)
@@ -139,9 +163,9 @@ for _ in range(loops):
     with torch.no_grad():
         results = bitblock.forward(hidden_states)
     for key, value in results[1].items():
-        if key in all_results: 
+        if key in all_results:
             all_results[key].append(value)
-        else: 
+        else:
             all_results[key] = [value]
 
 import matplotlib.pyplot as plt
@@ -156,7 +180,7 @@ for ax, (key, values) in zip(axes, all_results.items()):
     ax.set_title(f"{key} Execution Time", fontweight='bold')
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel("Frequency")
-    
+
     # Add a vertical line for the mean
     mean_val = statistics.mean(values)
     ax.axvline(mean_val, color='red', linestyle='dashed', linewidth=1)
@@ -165,16 +189,19 @@ for ax, (key, values) in zip(axes, all_results.items()):
 plt.suptitle("EvluationBitBlock Timing Distributions", fontsize=14, y=1.02)
 
 # Save the plot (crucial if running on a headless GPU server)
-plt.savefig("outputs/images/timings.png", bbox_inches='tight')
+plt.savefig(f"outputs/images/timingsbs{batch_size}seq_len:{seq_len}.png", bbox_inches='tight')
 
 # print(f"full results: {all_results}")
-for key, values in all_results.items(): 
-    print("=========================================")
-    print(f"{key}")
-    print("-----------------------------------------")
-    print(f"Mean: {statistics.mean(values)}")
-    print(f"Standard Deviation: {statistics.stdev(values)}")
-    print(f"Min: {min(values)}")
-    print(f"Max: {max(values)}")
+output_file = f"outputs/txt/bitblock_timingsbs{batch_size}seq_len:{seq_len}.txt"
+
+with open(output_file, "w") as f:
+    for key, values in all_results.items():
+        f.write("=========================================\n")
+        f.write(f"{key}\n")
+        f.write("-----------------------------------------\n")
+        f.write(f"Mean: {statistics.mean(values):.3f}ms\n")
+        f.write(f"Standard Deviation: {statistics.stdev(values):.3f}ms\n")
+        f.write(f"Min: {min(values):.3f}ms\n")
+        f.write(f"Max: {max(values):.3f}ms\n")
 
 print("finished running")
